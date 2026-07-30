@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ev-ai-inference-api
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ev-ai-inference-api}}
+  template:
+    metadata: {labels: {app: ev-ai-inference-api}}
+    spec:
+      containers:
+        - name: api
+          image: REPLACE_WITH_IMAGE_URI
+          ports: [{containerPort: 8000}]
+          env: [{name: MODEL_BUNDLE_DIR, value: /app/model_bundles/current_stage_v1/ev_battery_safety_inference_v1}]
+          resources:
+            requests: {cpu: 250m, memory: 768Mi}
+            limits: {cpu: "1", memory: 1536Mi}
+          livenessProbe: {httpGet: {path: /healthz, port: 8000}, initialDelaySeconds: 10, periodSeconds: 10}
+          readinessProbe: {httpGet: {path: /readyz, port: 8000}, initialDelaySeconds: 15, periodSeconds: 10}
