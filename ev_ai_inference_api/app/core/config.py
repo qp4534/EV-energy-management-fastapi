@@ -13,11 +13,67 @@ class Settings:
     bundle_dir: Path
     session_ttl_seconds: int = 900
     max_sessions: int = 1_000
+    database_url: str = "postgresql+asyncpg://ev_app:ev_app@127.0.0.1:5433/ev_ai"
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    cors_origins: tuple[str, ...] = (
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    )
+    twin_infra_required: bool = False
+    twin_consumer_group: str = "twin-persistence"
+    twin_consumer_name: str = "worker-1"
+    thermal_inference_url: str = ""
+    thermal_inference_token: str = ""
+    thermal_inference_timeout_seconds: float = 0.8
 
     @classmethod
     def load(cls) -> "Settings":
         default = Path(__file__).resolve().parents[2] / "model_bundles" / "current_stage_v1" / "ev_battery_safety_inference_v1"
-        return cls(Path(os.getenv("MODEL_BUNDLE_DIR", default)).resolve(), int(os.getenv("SESSION_TTL_SECONDS", "900")), int(os.getenv("MAX_SESSIONS", "1000")))
+        origins = tuple(
+            origin.strip()
+            for origin in os.getenv(
+                "CORS_ORIGINS",
+                "http://localhost:5173,http://127.0.0.1:5173",
+            ).split(",")
+            if origin.strip()
+        )
+        required = os.getenv("TWIN_INFRA_REQUIRED", "false").strip().lower()
+        if required not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
+            raise ValueError("TWIN_INFRA_REQUIRED must be a boolean")
+        settings = cls(
+            bundle_dir=Path(os.getenv("MODEL_BUNDLE_DIR", default)).resolve(),
+            session_ttl_seconds=int(os.getenv("SESSION_TTL_SECONDS", "900")),
+            max_sessions=int(os.getenv("MAX_SESSIONS", "1000")),
+            database_url=os.getenv(
+                "DATABASE_URL",
+                "postgresql+asyncpg://ev_app:ev_app@127.0.0.1:5433/ev_ai",
+            ),
+            redis_url=os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"),
+            cors_origins=origins,
+            twin_infra_required=required in {"1", "true", "yes", "on"},
+            twin_consumer_group=os.getenv(
+                "TWIN_CONSUMER_GROUP", "twin-persistence"
+            ).strip(),
+            twin_consumer_name=os.getenv("TWIN_CONSUMER_NAME", "worker-1").strip(),
+            thermal_inference_url=os.getenv("THERMAL_INFERENCE_URL", "").strip(),
+            thermal_inference_token=os.getenv("THERMAL_INFERENCE_TOKEN", "").strip(),
+            thermal_inference_timeout_seconds=float(
+                os.getenv("THERMAL_INFERENCE_TIMEOUT_SECONDS", "0.8")
+            ),
+        )
+        if settings.session_ttl_seconds <= 0:
+            raise ValueError("SESSION_TTL_SECONDS must be positive")
+        if settings.max_sessions <= 0:
+            raise ValueError("MAX_SESSIONS must be positive")
+        if not settings.database_url:
+            raise ValueError("DATABASE_URL must not be empty")
+        if not settings.redis_url:
+            raise ValueError("REDIS_URL must not be empty")
+        if not settings.twin_consumer_group or not settings.twin_consumer_name:
+            raise ValueError("Twin consumer group and name must not be empty")
+        if settings.thermal_inference_timeout_seconds <= 0:
+            raise ValueError("THERMAL_INFERENCE_TIMEOUT_SECONDS must be positive")
+        return settings
 
 
 def validate_bundle(settings: Settings) -> dict:

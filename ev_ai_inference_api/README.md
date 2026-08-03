@@ -25,6 +25,43 @@ docker build -t ev-ai-inference-api .
 docker run -p 8000:8000 ev-ai-inference-api
 ```
 
+### 로컬 3D Twin 실험
+
+Docker Desktop이 실행 중일 때 프로젝트 전용 PostgreSQL 17은 Windows의 기존
+PostgreSQL 5432와 분리해 `127.0.0.1:5433`에 노출됩니다. Redis와 API도 각각
+`127.0.0.1:6379`, `127.0.0.1:8000`으로만 노출됩니다.
+
+```powershell
+docker compose up --build -d
+docker compose ps
+docker compose exec api python -m app.simulator seed-history
+```
+
+`seed-history`는 프론트 mock ID와 같은 `car-uuid-001`부터 `003`까지 세 차량에
+완료된 3시간 사건과 차량당 정확히 10,800개 프레임을 만듭니다. 실시간 전송은
+Windows 호스트의 가상환경에서 실행하며 `--speed`는 논리적 1Hz 대비 배속입니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m app.simulator replay-live --speed 60
+```
+
+Twin API는 다음 계약을 제공합니다.
+
+- `POST /api/v1/twins/vehicles/{vehicle_id}/samples`
+- `GET /api/v1/twins/risk-vehicles`
+- `GET /api/v1/twins/vehicles/{vehicle_id}/incidents`
+- `GET /api/v1/twins/vehicles/{vehicle_id}/incidents/latest/history?resolution_seconds=30`
+- `GET /api/v1/twins/vehicles/{vehicle_id}/incidents/{incident_id}/history?resolution_seconds=30`
+- `WS /api/v1/twins/vehicles/{vehicle_id}/live`
+
+공개 `TwinFrame`은 `generic_ev_concept_96_v1` 배치의 96셀 온도·전압·상태 배열과
+3개 커넥터 부품 상태를 담습니다. 사건은 주의 이상 2초 연속 시 즉시 시작하며,
+아직 한 시간 버퍼가 차지 않았으면 가용한 연속 사전 프레임부터 저장합니다.
+`[발생-3600초, 발생+7200초)`에 정확히 10,800개가 모이면 `complete`, 창이 끝났지만
+프레임이 부족하면 `incomplete`로 닫습니다. 60초 정상 상태로 재무장되면 이전 사건의
+사후 창이 진행 중이어도 새 사건을 시작하며, 겹치는 프레임은 두 사건 모두에 저장합니다.
+기존 `/v1/vehicles/{vehicle_id}/samples` 계약은 그대로 유지됩니다.
+
 `k8s/`는 일반 Kubernetes manifest만 제공하며 이미지 URI는 `REPLACE_WITH_IMAGE_URI` placeholder입니다. AWS 계정·리전·ECR·EKS 정보는 포함하지 않았습니다.
 
 ## CI/CD 선택 중립성

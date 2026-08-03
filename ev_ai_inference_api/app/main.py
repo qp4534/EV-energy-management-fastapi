@@ -2,29 +2,85 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from redis.asyncio import Redis
+from sqlalchemy import text
 from app.core.config import Settings, validate_bundle
 from app.core.session_manager import SessionManager
+from app.core.twin_redis import TwinRedisStore
+from app.db import TwinRepository, create_database
 from app.routers.current_stage import router
+from app.routers.twins import router as twins_router
 from app.services.current_stage_service import CurrentStageService
+from app.services.thermal_inference import ThermalInferenceClient
+from app.services.twin_service import TwinService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.ready = False
+    app.state.twin_ready = False
     app.state.readiness_error = None
     settings = Settings.load()
+    app.state.settings = settings
+    engine = None
+    redis = None
     try:
         manifest = validate_bundle(settings)
         from hybrid_safety_supervisor import HybridSafetySupervisorV2
         def factory(): return HybridSafetySupervisorV2(settings.bundle_dir / "models" / "hybrid_v1", settings.bundle_dir / "config" / "safety_policy.v2.json")
         app.state.manifest = manifest
-        app.state.current_stage_service = CurrentStageService(SessionManager(factory, settings.session_ttl_seconds, settings.max_sessions))
+        current_stage_service = CurrentStageService(
+            SessionManager(factory, settings.session_ttl_seconds, settings.max_sessions)
+        )
+        app.state.current_stage_service = current_stage_service
+        engine, sessions = create_database(settings.database_url)
+        redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        redis_store = TwinRedisStore(redis)
+        app.state.database_engine = engine
+        app.state.database_sessions = sessions
+        app.state.twin_redis = redis_store
+        app.state.twin_service = TwinService(
+            current_stage_service,
+            redis_store,
+            sessions,
+            TwinRepository(),
+            ThermalInferenceClient(
+                settings.thermal_inference_url,
+                settings.thermal_inference_token,
+                settings.thermal_inference_timeout_seconds,
+            ),
+        )
+        if settings.twin_infra_required:
+            await redis_store.ping()
+            async with engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+                table = await connection.scalar(
+                    text("SELECT to_regclass('public.twin_incidents')")
+                )
+                if table is None:
+                    raise RuntimeError("twin database migration has not completed")
+        app.state.twin_ready = True
         app.state.ready = True
     except Exception as exc:
         app.state.readiness_error = str(exc)
-    yield
+    try:
+        yield
+    finally:
+        if redis is not None:
+            await redis.aclose()
+        if engine is not None:
+            await engine.dispose()
 
-app = FastAPI(title="EV Battery Safety Inference API", version="1.0.0", lifespan=lifespan)
+_settings = Settings.load()
+app = FastAPI(title="EV Battery Safety Inference API", version="1.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(_settings.cors_origins),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(_: Request, exc: RequestValidationError):
@@ -33,3 +89,4 @@ async def validation_error_handler(_: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={"detail": detail})
 
 app.include_router(router)
+app.include_router(twins_router)
