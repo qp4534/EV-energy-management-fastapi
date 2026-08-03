@@ -88,7 +88,7 @@ def test_cell_image_fusion_does_not_broadcast_one_cell_to_a_module() -> None:
     assert fused["hotspot_cell_index"] == 51
 
 
-def test_image_only_danger_is_capped_but_sensor_emergency_always_wins() -> None:
+def test_visual_risk_does_not_override_bms_supervisor_final() -> None:
     result = ThermalInferenceResult(
         model_id="test",
         risk_level=3,
@@ -105,8 +105,9 @@ def test_image_only_danger_is_capped_but_sensor_emergency_always_wins() -> None:
         module_heat_score=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
         hotspot_module_index=6,
     )
-    assert image_only["final_risk_level"] == 2
+    assert image_only["final_risk_level"] == 0
     assert max(image_only["module_state_level"]) == 2
+    assert image_only["image_risk_level"] == 3
 
     physical = fuse_twin_state(
         sample().model_copy(
@@ -119,7 +120,25 @@ def test_image_only_danger_is_capped_but_sensor_emergency_always_wins() -> None:
         module_heat_score=(0.0,) * 12,
     )
     assert physical["final_risk_level"] == 3
-    assert physical["fusion_source"] == "physics"
+    assert physical["fusion_source"] == "image+sensor"
+
+
+def test_uncorroborated_cell_emergency_stays_at_supervisor_warning() -> None:
+    payload = sample().model_copy(
+        update={"temperature_decic": [350] * 51 + [850] + [350] * 44}
+    )
+
+    fused = fuse_twin_state(
+        payload,
+        ml_level=None,
+        physical_rule_level=3,
+        bms_final_level=2,
+    )
+
+    assert fused["state_level"][51] == 3
+    assert fused["physics_risk_level"] == 3
+    assert fused["final_risk_level"] == 2
+    assert fused["fusion_source"] == "sensor-only"
 
 
 def test_low_confidence_image_is_marked_unqualified_and_does_not_raise_risk() -> None:

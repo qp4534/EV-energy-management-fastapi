@@ -60,6 +60,9 @@ Twin API는 다음 계약을 제공합니다.
 `[발생-3600초, 발생+7200초)`에 정확히 10,800개가 모이면 `complete`, 창이 끝났지만
 프레임이 부족하면 `incomplete`로 닫습니다. 60초 정상 상태로 재무장되면 이전 사건의
 사후 창이 진행 중이어도 새 사건을 시작하며, 겹치는 프레임은 두 사건 모두에 저장합니다.
+`final_risk_level`은 기존 `HybridSafetySupervisorV2`의 `final_safety_alert`를 그대로
+사용합니다. 셀·커넥터 임계값과 열화상 결과는 3D 시각화용 상태이며 이 최종 판정을
+덮어쓰지 않습니다. `fusion_source`는 셀·모듈 시각화에 사용된 입력을 설명합니다.
 기존 `/v1/vehicles/{vehicle_id}/samples` 계약은 그대로 유지됩니다.
 
 `k8s/`는 일반 Kubernetes manifest만 제공하며 이미지 URI는 `REPLACE_WITH_IMAGE_URI` placeholder입니다. AWS 계정·리전·ECR·EKS 정보는 포함하지 않았습니다.

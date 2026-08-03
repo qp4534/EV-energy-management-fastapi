@@ -71,12 +71,10 @@ def fuse_twin_state(
         else 25.0
     )
     sensor_heat_score = sensor_cell_heat_scores(payload.temperature_decic, ambient)
-    physics_level = max(
-        physical_rule_level,
-        max(sensor_cell_levels),
-        max(connector_levels),
-    )
-    sensor_final_level = max(bms_final_level, physics_level)
+    # The existing BMS supervisor is the sole authority for the vehicle's final
+    # safety decision. Cell/connector thresholds below are visualization data;
+    # they must not bypass the supervisor's corroboration policy.
+    physics_level = physical_rule_level
 
     result = thermal_result or ThermalInferenceResult(status="unavailable")
     image_is_valid = (
@@ -94,7 +92,7 @@ def fuse_twin_state(
         image_status = "unqualified"
     image_level = result.risk_level if image_is_valid and result.risk_level is not None else 0
     effective_image_level = (
-        min(image_level, 2) if image_is_valid and sensor_final_level == 0 else image_level
+        min(image_level, 2) if image_is_valid and bms_final_level == 0 else image_level
     )
     if thermal_cell_heat_score is not None and len(thermal_cell_heat_score) != 96:
         raise ValueError("thermal cell heat score array must contain 96 values")
@@ -123,13 +121,11 @@ def fuse_twin_state(
             max(sensor_level, _image_module_level(score, effective_image_level))
             for sensor_level, score in zip(sensor_module_levels, module_heat_score, strict=True)
         ]
-    final_level = max(sensor_final_level, effective_image_level)
-    if physics_level >= 3:
-        final_level = 3
+    final_level = bms_final_level
 
-    if physics_level >= 3:
-        fusion_source = "physics"
-    elif image_status == "unqualified":
+    # fusion_source describes the 3D visualization inputs, not the authority
+    # that produced final_risk_level.
+    if image_status == "unqualified":
         fusion_source = "image-unqualified"
     elif image_is_valid:
         fusion_source = "image+sensor"

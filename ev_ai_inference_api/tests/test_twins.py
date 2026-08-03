@@ -178,7 +178,7 @@ async def test_twin_contract_is_flat_and_enforces_layout_and_array_lengths() -> 
 
 
 @pytest.mark.asyncio
-async def test_twin_service_enforces_exact_1hz_and_combines_physical_connector() -> None:
+async def test_twin_service_enforces_exact_1hz_and_keeps_connector_visual_only() -> None:
     redis = FakeTwinRedis()
     service = TwinService(FakeCurrentStage(), redis, None)  # type: ignore[arg-type]
     first = await service.evaluate(
@@ -186,8 +186,8 @@ async def test_twin_service_enforces_exact_1hz_and_combines_physical_connector()
     )
     assert first.ml_risk_level is None
     assert first.connector_state_level == [2, 0, 0]
-    assert first.physics_risk_level == 2
-    assert first.final_risk_level == 2
+    assert first.physics_risk_level == 0
+    assert first.final_risk_level == 0
 
     await service.evaluate("car-uuid-001", sample(1))
     with pytest.raises(TwinSequenceConflict, match="sequence"):
