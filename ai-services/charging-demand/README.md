@@ -14,6 +14,18 @@ uvicorn fastapi_app:app --host 0.0.0.0 --port 8001
 - `POST /predict` — `{hour, dow, month, year}` → 예상 세션 수 / 수요 수준
 - `POST /predict/curve` — 하루 0~23시 곡선
 
+## ⚠️ 알려진 이슈 — scikit-learn 버전을 반드시 맞춰야 함
+`pip install scikit-learn`으로 최신 버전(예: 1.9.x)이 깔리면 `demand_ca_model.joblib` 로딩 시
+아래 에러로 서버 기동이 실패한다(실제 재현 확인함).
+```
+ModuleNotFoundError: No module named '_loss'
+```
+`GradientBoostingRegressor` 내부의 Cython 손실함수 객체가 학습 당시 scikit-learn 버전과
+다르면 pickle 호환이 깨지기 때문이다. 이 모델은 **scikit-learn 1.7.2**로 학습되어 있는 걸
+확인했고(`rul-diagnosis`의 RandomForest 계열 모델에 뜬 `InconsistentVersionWarning`으로 역추적),
+`requirements.txt`에 `scikit-learn==1.7.2`로 고정해뒀다. **버전을 올리지 말 것** — 올리면 다시
+로딩이 깨진다. `pip install -r requirements.txt`로 설치하면 이 문제가 없다.
+
 ## ERD 연동 메모
 - `CHARGER.queue_length`, `CHARGER.waiting_time_min`은 ERD 주석상 "AI 모델 출력값, 주기 배치 갱신" 대상 컬럼이다.
   이 서비스의 `/predict` 결과(예상 세션 수·수요 수준)를 `BATCH_JOBS`에 등록된 배치가 주기적으로 호출해
