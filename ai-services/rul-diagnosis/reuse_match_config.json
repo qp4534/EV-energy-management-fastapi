@@ -1,0 +1,167 @@
+{
+  "NORM": {
+    "discharge_time_s": {
+      "p5": 934.889,
+      "p95": 2203.22
+    },
+    "cc_ratio": {
+      "p5": 0.242160814823416,
+      "p95": 0.6497917780360492
+    },
+    "decrement_36_34v_s": {
+      "p5": 240.75,
+      "p95": 813.625
+    }
+  },
+  "FULL_LIFE": 1134.0,
+  "APPLICATIONS": [
+    {
+      "id": "ev",
+      "value": 1.0,
+      "name": "EV 재장착 (1차 수명 유지)",
+      "emoji": "🚗",
+      "min_life": 0.35,
+      "need": {
+        "life": 0.55,
+        "capacity": 0.6,
+        "charge": 0.55,
+        "stability": 0.5
+      },
+      "w": {
+        "life": 0.45,
+        "capacity": 0.25,
+        "charge": 0.2,
+        "stability": 0.1
+      },
+      "desc": "주행거리·출력 요구를 아직 충족. 재제조 후 차량용으로 계속 사용.",
+      "case": "업계 관례상 SOH 80%↑ 팩은 재제조 시 잔존가치가 가장 큼"
+    },
+    {
+      "id": "grid_ess",
+      "value": 0.88,
+      "name": "대형 계통 ESS (피크저감·주파수조정)",
+      "emoji": "🏭",
+      "min_life": 0.22,
+      "need": {
+        "life": 0.35,
+        "capacity": 0.5,
+        "charge": 0.45,
+        "stability": 0.55
+      },
+      "w": {
+        "life": 0.3,
+        "capacity": 0.25,
+        "charge": 0.15,
+        "stability": 0.3
+      },
+      "desc": "대용량·장시간 운전. 셀 안정성이 가장 중요한 용도.",
+      "case": "Nissan 암스테르담 ArenA 3MW ESS / Renault Advanced Battery Storage"
+    },
+    {
+      "id": "solar_ess",
+      "value": 0.75,
+      "name": "상업·가정용 소형 ESS (태양광 연계)",
+      "emoji": "🏠",
+      "min_life": 0.13,
+      "need": {
+        "life": 0.25,
+        "capacity": 0.35,
+        "charge": 0.35,
+        "stability": 0.4
+      },
+      "w": {
+        "life": 0.3,
+        "capacity": 0.25,
+        "charge": 0.2,
+        "stability": 0.25
+      },
+      "desc": "중소 용량·일 1회 충방전. 부하가 낮아 열화 팩도 활용 가능.",
+      "case": "Nissan xStorage (LEAF 폐배터리 280개 건물용 ESS 전환)"
+    },
+    {
+      "id": "ups",
+      "value": 0.6,
+      "name": "UPS·비상전원",
+      "emoji": "🔌",
+      "min_life": 0.09,
+      "need": {
+        "life": 0.18,
+        "capacity": 0.3,
+        "charge": 0.25,
+        "stability": 0.55
+      },
+      "w": {
+        "life": 0.2,
+        "capacity": 0.2,
+        "charge": 0.15,
+        "stability": 0.45
+      },
+      "desc": "평시 대기·유사시 단시간 방전. 용량보다 '방전 안정성'이 핵심.",
+      "case": "국내외 사용후 배터리 UPS 전환 사업 다수"
+    },
+    {
+      "id": "lsv",
+      "value": 0.64,
+      "name": "저속 이동체 (전기지게차·골프카트)",
+      "emoji": "🛺",
+      "min_life": 0.11,
+      "need": {
+        "life": 0.2,
+        "capacity": 0.4,
+        "charge": 0.35,
+        "stability": 0.35
+      },
+      "w": {
+        "life": 0.25,
+        "capacity": 0.35,
+        "charge": 0.2,
+        "stability": 0.2
+      },
+      "desc": "저속·저부하 주행. 출력 요구가 EV보다 훨씬 낮음.",
+      "case": "피엠그로우 등 배터리 순환경제 사업의 대표 재사용처"
+    },
+    {
+      "id": "streetlight",
+      "value": 0.42,
+      "name": "가로등·소형 태양광 저장",
+      "emoji": "💡",
+      "min_life": 0.05,
+      "need": {
+        "life": 0.1,
+        "capacity": 0.2,
+        "charge": 0.2,
+        "stability": 0.3
+      },
+      "w": {
+        "life": 0.25,
+        "capacity": 0.25,
+        "charge": 0.2,
+        "stability": 0.3
+      },
+      "desc": "초저부하·소용량. 열화가 상당히 진행된 팩도 수용 가능.",
+      "case": "한국환경공단 전기차 폐배터리 ESS 재사용 실증"
+    },
+    {
+      "id": "recycle",
+      "value": 0.2,
+      "name": "소재 회수 (재활용)",
+      "emoji": "♻️",
+      "min_life": 0.0,
+      "need": {
+        "life": 0.0,
+        "capacity": 0.0,
+        "charge": 0.0,
+        "stability": 0.0
+      },
+      "w": {
+        "life": 1.0,
+        "capacity": 0.0,
+        "charge": 0.0,
+        "stability": 0.0
+      },
+      "desc": "재사용 기준 미달. 습식제련으로 Li·Co 약 95%, Ni 약 97% 회수.",
+      "case": "성일하이텍 등 배터리 재활용 전문기업 / 사용후배터리 산업 육성법(2025.10 시행)",
+      "fallback": true
+    }
+  ]
+}
