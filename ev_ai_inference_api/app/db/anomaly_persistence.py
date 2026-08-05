@@ -59,6 +59,17 @@ class AnomalyPersistence:
             },
             ensure_ascii=False,
         )
+        model_input = json.dumps(
+            {
+                "voltage_v": payload.voltage_v,
+                "temp_mean_c": payload.temp_mean_c,
+                "temp_max_c": payload.temp_max_c,
+                "temp_delta_c": payload.temp_delta_c,
+                "temp_saturation_fraction": payload.temp_saturation_fraction,
+                "temp_saturation_all": payload.temp_saturation_all,
+            },
+            ensure_ascii=False,
+        )
 
         async with self._sessions.begin() as session:
             anomaly_id = await session.scalar(
@@ -66,10 +77,10 @@ class AnomalyPersistence:
                     '''
                     INSERT INTO public."ANOMALY_LOGS"
                         (abnormal_type, source_type, trigger_value, detected_at,
-                         risk_level, car_id)
+                         risk_level, car_id, session_id)
                     VALUES
                         (:abnormal_type, :source_type, :trigger_value, :detected_at,
-                         :risk_level, CAST(:car_id AS uuid))
+                         :risk_level, CAST(:car_id AS uuid), CAST(:session_id AS uuid))
                     RETURNING anomaly_id
                     '''
                 ),
@@ -80,6 +91,7 @@ class AnomalyPersistence:
                     "detected_at": observed_at,
                     "risk_level": ALERT_RISK_TEXT[alert],
                     "car_id": car_id,
+                    "session_id": str(payload.session_id) if payload.session_id else None,
                 },
             )
             await session.execute(
@@ -88,13 +100,14 @@ class AnomalyPersistence:
                     INSERT INTO public."TWIN_FRAMES"
                         (observed_at, hotspot_cell_index, hotspot_connector_index,
                          ml_risk_level, physics_risk_level, final_risk_level,
-                         image_risk_level, image_confidence, raw_metrics,
-                         anomaly_id, car_id, source_image_ref)
+                         image_risk_level, image_confidence, raw_metrics, model_input,
+                         anomaly_id, car_id, session_id, source_image_ref)
                     VALUES
                         (:observed_at, :hotspot_cell_index, :hotspot_connector_index,
                          :ml_risk_level, :physics_risk_level, :final_risk_level,
                          :image_risk_level, :image_confidence, CAST(:raw_metrics AS jsonb),
-                         :anomaly_id, CAST(:car_id AS uuid), :source_image_ref)
+                         CAST(:model_input AS jsonb), :anomaly_id, CAST(:car_id AS uuid),
+                         CAST(:session_id AS uuid), :source_image_ref)
                     '''
                 ),
                 {
@@ -107,8 +120,10 @@ class AnomalyPersistence:
                     "image_risk_level": payload.image_risk_level,
                     "image_confidence": payload.image_confidence,
                     "raw_metrics": raw_metrics,
+                    "model_input": model_input,
                     "anomaly_id": anomaly_id,
                     "car_id": car_id,
+                    "session_id": str(payload.session_id) if payload.session_id else None,
                     "source_image_ref": payload.source_image_ref,
                 },
             )

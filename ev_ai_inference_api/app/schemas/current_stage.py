@@ -1,12 +1,14 @@
 from __future__ import annotations
 from math import isfinite
 from typing import Literal
+from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 from .common import Stage
 
 class SampleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     timestamp_seconds: float
+    session_id: UUID | None = None
     voltage_v: float
     temp_mean_c: float
     temp_max_c: float
@@ -18,6 +20,8 @@ class SampleRequest(BaseModel):
     ambient_temp_c: float | None = None
     pack_current_a: float | None = None
     cell_voltages_v: list[float] | None = None
+    temperature_decic: list[int] | None = None
+    connector_temperature_decic: list[int] | None = None
     charging_gun_temperature_c: float | None = None
     observed_at: AwareDatetime | None = None
     hotspot_cell_index: int | None = Field(default=None, ge=0)
@@ -35,6 +39,15 @@ class SampleRequest(BaseModel):
     @classmethod
     def finite_cells(cls, value: list[float] | None) -> list[float] | None:
         if value is not None and not all(isfinite(x) for x in value): raise ValueError("cell_voltages_v must contain finite numbers")
+        return value
+    @field_validator("temperature_decic", "connector_temperature_decic")
+    @classmethod
+    def valid_raw_temperature_arrays(cls, value: list[int] | None, info) -> list[int] | None:
+        if value is None:
+            return None
+        expected = 96 if info.field_name == "temperature_decic" else 3
+        if len(value) != expected:
+            raise ValueError(f"{info.field_name} must contain {expected} values")
         return value
 
 class CurrentStageResponse(BaseModel):
