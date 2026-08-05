@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import math
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
@@ -31,6 +32,7 @@ class TwinSampleRequest(BaseModel):
 
     schema_version: Literal[1] = TWIN_SCHEMA_VERSION
     layout_id: Literal["generic_ev_concept_96_v1"] = TWIN_LAYOUT_ID
+    session_id: UUID | None = None
     observed_at: AwareDatetime
     sequence: SequenceNumber
     temperature_decic: list[SmallInt]
@@ -93,6 +95,8 @@ class TwinFrame(BaseModel):
     schema_version: Literal[1] = TWIN_SCHEMA_VERSION
     layout_id: Literal["generic_ev_concept_96_v1"] = TWIN_LAYOUT_ID
     vehicle_id: str
+    anomaly_id: str | None = None
+    session_id: UUID | None = None
     observed_at: AwareDatetime
     sequence: SequenceNumber
     temperature_decic: list[SmallInt]

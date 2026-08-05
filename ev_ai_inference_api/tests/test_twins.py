@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -36,10 +37,12 @@ def sample(
     *,
     observed_at: datetime | None = None,
     connector_peak: int = 350,
+    session_id: UUID | None = None,
 ) -> TwinSampleRequest:
     connector = [connector_peak, 320, 300]
     return TwinSampleRequest(
         observed_at=observed_at or START + timedelta(seconds=sequence),
+        session_id=session_id,
         sequence=sequence,
         temperature_decic=[350] * 96,
         voltage_mv=[3_800] * 96,
@@ -84,6 +87,9 @@ def test_incident_type_uses_the_dominant_visual_risk_source() -> None:
 
 
 class FakeCurrentStage:
+    def __init__(self) -> None:
+        self.reset_calls = []
+
     async def evaluate(self, vehicle_id, request):
         return CurrentStageResponse(
             vehicle_id=vehicle_id,
@@ -97,6 +103,10 @@ class FakeCurrentStage:
             charging_equipment_observation="present_not_used_as_cell_temperature",
             reason_codes=[],
         )
+
+    async def reset(self, vehicle_id):
+        self.reset_calls.append(vehicle_id)
+        return {"reset": True}
 
 
 class FakeTwinRedis:
@@ -133,6 +143,8 @@ async def test_twin_contract_is_flat_and_enforces_layout_and_array_lengths() -> 
         "schema_version",
         "layout_id",
         "vehicle_id",
+        "anomaly_id",
+        "session_id",
         "observed_at",
         "sequence",
         "temperature_decic",
@@ -197,6 +209,90 @@ async def test_twin_service_enforces_exact_1hz_and_keeps_connector_visual_only()
             "car-uuid-001",
             sample(2, observed_at=START + timedelta(seconds=3)),
         )
+
+
+@pytest.mark.asyncio
+async def test_new_session_resets_vehicle_history_and_allows_sequence_restart() -> None:
+    redis = FakeTwinRedis()
+    previous_session = UUID("11111111-1111-1111-1111-111111111111")
+    next_session = UUID("22222222-2222-2222-2222-222222222222")
+    redis.latest = frame(120).model_copy(update={"session_id": previous_session})
+    current_stage = FakeCurrentStage()
+    service = TwinService(current_stage, redis, None)  # type: ignore[arg-type]
+
+    result = await service.evaluate(
+        "car-uuid-001",
+        sample(
+            sequence=0,
+            observed_at=START + timedelta(hours=1),
+            session_id=next_session,
+        ),
+    )
+
+    assert current_stage.reset_calls == ["car-uuid-001"]
+    assert result.sequence == 0
+    assert result.session_id == next_session
+
+
+class FakeRiskCurrentStage:
+    async def evaluate(self, vehicle_id, request):
+        return CurrentStageResponse(
+            vehicle_id=vehicle_id,
+            sensor_health="good",
+            history_seconds=30,
+            model_route="stage_30s",
+            ml_pattern_stage="caution",
+            current_stage_probabilities={
+                "normal": 0.1,
+                "caution": 0.8,
+                "warning": 0.1,
+                "emergency": 0.0,
+            },
+            physical_rule_level="caution",
+            final_safety_alert="caution",
+            charging_equipment_observation="present_not_used_as_cell_temperature",
+            reason_codes=["test"],
+        )
+
+
+class FakeAnomalyPersistence:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def persist_if_anomalous(
+        self, car_id, payload, inference, twin_frame=None
+    ):
+        self.calls.append((car_id, payload, inference, twin_frame))
+        return "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.mark.asyncio
+async def test_twin_sample_uses_observed_at_and_persists_the_same_live_frame() -> None:
+    redis = FakeTwinRedis()
+    persistence = FakeAnomalyPersistence()
+    session_id = UUID("22222222-2222-2222-2222-222222222222")
+    service = TwinService(
+        FakeRiskCurrentStage(),
+        redis,
+        None,  # type: ignore[arg-type]
+        anomaly_persistence=persistence,  # type: ignore[arg-type]
+    )
+
+    result = await service.evaluate(
+        "00000000-0000-0000-0000-000000000001",
+        sample(session_id=session_id),
+    )
+
+    assert result.anomaly_id == "11111111-1111-1111-1111-111111111111"
+    assert redis.published == [result]
+    assert len(persistence.calls) == 1
+    _, model_payload, inference, twin_frame = persistence.calls[0]
+    assert model_payload.timestamp_seconds == START.timestamp()
+    assert model_payload.observed_at == START
+    assert model_payload.session_id == session_id
+    assert model_payload.temperature_decic == [350] * 96
+    assert inference.final_safety_alert == "caution"
+    assert twin_frame.observed_at == START
 
 
 def test_cell_visual_state_uses_temperature_and_voltage_thresholds() -> None:

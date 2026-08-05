@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.schemas.current_stage import CurrentStageResponse, SampleRequest
+from app.schemas.twins import TwinFrame
 
 
 ALERT_RISK_TEXT = {
@@ -34,6 +35,7 @@ class AnomalyPersistence:
         car_id: str,
         payload: SampleRequest,
         inference: CurrentStageResponse,
+        twin_frame: TwinFrame | None = None,
     ) -> str | None:
         alert = inference.final_safety_alert
         if alert not in ALERT_RISK_TEXT:
@@ -52,13 +54,15 @@ class AnomalyPersistence:
             if inference.ml_pattern_stage is not None
             else None
         )
-        raw_metrics = json.dumps(
-            {
-                "request": payload.model_dump(mode="json", exclude_none=True),
-                "inference": inference.model_dump(mode="json", exclude_none=True),
-            },
-            ensure_ascii=False,
-        )
+        raw_metrics_payload = {
+            "request": payload.model_dump(mode="json", exclude_none=True),
+            "inference": inference.model_dump(mode="json", exclude_none=True),
+        }
+        if twin_frame is not None:
+            raw_metrics_payload["twin_frame"] = twin_frame.model_dump(
+                mode="json", exclude_none=True
+            )
+        raw_metrics = json.dumps(raw_metrics_payload, ensure_ascii=False)
         model_input = json.dumps(
             {
                 "voltage_v": payload.voltage_v,
