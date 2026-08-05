@@ -25,6 +25,7 @@ class Settings:
     thermal_inference_url: str = ""
     thermal_inference_token: str = ""
     thermal_inference_timeout_seconds: float = 0.8
+    anomaly_persistence_enabled: bool = False
 
     @classmethod
     def load(cls) -> "Settings":
@@ -38,8 +39,13 @@ class Settings:
             if origin.strip()
         )
         required = os.getenv("TWIN_INFRA_REQUIRED", "false").strip().lower()
+        anomaly_persistence = os.getenv(
+            "ANOMALY_PERSISTENCE_ENABLED", "false"
+        ).strip().lower()
         if required not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
             raise ValueError("TWIN_INFRA_REQUIRED must be a boolean")
+        if anomaly_persistence not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
+            raise ValueError("ANOMALY_PERSISTENCE_ENABLED must be a boolean")
         settings = cls(
             bundle_dir=Path(os.getenv("MODEL_BUNDLE_DIR", default)).resolve(),
             session_ttl_seconds=int(os.getenv("SESSION_TTL_SECONDS", "900")),
@@ -60,6 +66,8 @@ class Settings:
             thermal_inference_timeout_seconds=float(
                 os.getenv("THERMAL_INFERENCE_TIMEOUT_SECONDS", "0.8")
             ),
+            anomaly_persistence_enabled=anomaly_persistence
+            in {"1", "true", "yes", "on"},
         )
         if settings.session_ttl_seconds <= 0:
             raise ValueError("SESSION_TTL_SECONDS must be positive")

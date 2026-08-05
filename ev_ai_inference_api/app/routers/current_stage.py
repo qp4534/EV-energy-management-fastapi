@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from sqlalchemy.exc import SQLAlchemyError
 from app.core.session_manager import TimestampConflict
 from app.schemas.current_stage import SampleRequest
 
@@ -22,9 +23,22 @@ async def model_info(request: Request):
 @router.post("/v1/vehicles/{vehicle_id}/samples")
 async def sample(vehicle_id: str, payload: SampleRequest, request: Request):
     if not request.app.state.ready: raise HTTPException(status_code=503, detail="model bundle is not ready")
-    try: return await request.app.state.current_stage_service.evaluate(vehicle_id, payload)
+    try:
+        result = await request.app.state.current_stage_service.evaluate(vehicle_id, payload)
+        if (
+            getattr(request.app.state, "anomaly_persistence_enabled", False)
+            and result.final_safety_alert in {"caution", "warning", "emergency"}
+        ):
+            anomaly_id = await request.app.state.anomaly_persistence.persist_if_anomalous(
+                vehicle_id, payload, result
+            )
+            if anomaly_id is not None:
+                result = result.model_copy(update={"anomaly_id": anomaly_id})
+        return result
     except TimestampConflict as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="anomaly persistence unavailable") from exc
     except Exception:
         raise HTTPException(status_code=500, detail="internal inference error")
 

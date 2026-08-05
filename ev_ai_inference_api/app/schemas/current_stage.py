@@ -1,7 +1,7 @@
 from __future__ import annotations
 from math import isfinite
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 from .common import Stage
 
 class SampleRequest(BaseModel):
@@ -19,6 +19,12 @@ class SampleRequest(BaseModel):
     pack_current_a: float | None = None
     cell_voltages_v: list[float] | None = None
     charging_gun_temperature_c: float | None = None
+    observed_at: AwareDatetime | None = None
+    hotspot_cell_index: int | None = Field(default=None, ge=0)
+    hotspot_connector_index: int | None = Field(default=None, ge=0)
+    image_risk_level: int | None = Field(default=None, ge=0, le=3)
+    image_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    source_image_ref: str | None = Field(default=None, max_length=500)
 
     @field_validator("timestamp_seconds", "voltage_v", "temp_mean_c", "temp_max_c", "temp_delta_c", "temp_saturation_fraction", "raw_temp_max_c", "raw_temp_mean_c", "ambient_temp_c", "pack_current_a", "charging_gun_temperature_c")
     @classmethod
@@ -38,3 +44,4 @@ class CurrentStageResponse(BaseModel):
     current_stage_probabilities: dict[Stage, float] | None = None
     physical_rule_level: Stage; final_safety_alert: Stage | Literal["unknown"]
     charging_equipment_observation: str; reason_codes: list[str]
+    anomaly_id: str | None = None

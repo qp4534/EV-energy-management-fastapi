@@ -10,6 +10,7 @@ from app.core.config import Settings, validate_bundle
 from app.core.session_manager import SessionManager
 from app.core.twin_redis import TwinRedisStore
 from app.db import TwinRepository, create_database
+from app.db.anomaly_persistence import AnomalyPersistence
 from app.routers.current_stage import router
 from app.routers.twins import router as twins_router
 from app.services.current_stage_service import CurrentStageService
@@ -39,6 +40,8 @@ async def lifespan(app: FastAPI):
         redis_store = TwinRedisStore(redis)
         app.state.database_engine = engine
         app.state.database_sessions = sessions
+        app.state.anomaly_persistence = AnomalyPersistence(sessions)
+        app.state.anomaly_persistence_enabled = settings.anomaly_persistence_enabled
         app.state.twin_redis = redis_store
         app.state.twin_service = TwinService(
             current_stage_service,
@@ -60,6 +63,18 @@ async def lifespan(app: FastAPI):
                 )
                 if table is None:
                     raise RuntimeError("twin database migration has not completed")
+        if settings.anomaly_persistence_enabled:
+            async with engine.connect() as connection:
+                anomaly_logs = await connection.scalar(
+                    text("SELECT to_regclass('public.\"ANOMALY_LOGS\"')")
+                )
+                twin_frames = await connection.scalar(
+                    text("SELECT to_regclass('public.\"TWIN_FRAMES\"')")
+                )
+                if anomaly_logs is None or twin_frames is None:
+                    raise RuntimeError(
+                        "ANOMALY_LOGS and TWIN_FRAMES must exist for anomaly persistence"
+                    )
         app.state.twin_ready = True
         app.state.ready = True
     except Exception as exc:
