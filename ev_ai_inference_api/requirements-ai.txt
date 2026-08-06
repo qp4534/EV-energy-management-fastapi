@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Installed only in chatbot/report images; realtime inference keeps its lean image.
+sentence-transformers>=5.0,<6.0

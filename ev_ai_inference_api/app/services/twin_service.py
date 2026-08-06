@@ -267,6 +267,15 @@ class TwinService:
     async def risk_vehicles(self) -> RiskVehicleListResponse:
         return RiskVehicleListResponse(items=await self.redis.risk_vehicles())
 
+    async def latest(self, vehicle_id: str) -> TwinFrame:
+        """Return only the live Redis snapshot, never an old incident frame."""
+
+        validate_vehicle_id(vehicle_id)
+        frame = await self.redis.get_latest(vehicle_id)
+        if frame is None:
+            raise IncidentNotFound("no live vehicle state is available")
+        return frame
+
     async def incidents(self, vehicle_id: str) -> IncidentListResponse:
         validate_vehicle_id(vehicle_id)
         async with self.sessions() as session:

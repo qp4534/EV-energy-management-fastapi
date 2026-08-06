@@ -40,7 +40,10 @@ async def lifespan(app: FastAPI):
         redis_store = TwinRedisStore(redis)
         app.state.database_engine = engine
         app.state.database_sessions = sessions
-        anomaly_persistence = AnomalyPersistence(sessions)
+        anomaly_persistence = AnomalyPersistence(
+            sessions,
+            enqueue_report_jobs=settings.report_jobs_enabled,
+        )
         app.state.anomaly_persistence = anomaly_persistence
         app.state.anomaly_persistence_enabled = settings.anomaly_persistence_enabled
         app.state.twin_redis = redis_store

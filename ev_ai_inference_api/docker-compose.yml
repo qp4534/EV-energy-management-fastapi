@@ -11,7 +11,7 @@ x-infra-environment: &infra-environment
 
 services:
   postgres:
-    image: postgres:17
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ev_ai}
