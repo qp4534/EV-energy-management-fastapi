@@ -46,7 +46,7 @@ class SentenceTransformerEmbedder:
                 return SentenceTransformer(self.model_name)
 
             self._model = await asyncio.to_thread(load)
-            detected = self._model.get_sentence_embedding_dimension()
+            detected = self._model.get_embedding_dimension()
             if detected != self.dimension:
                 raise ValueError(
                     f"embedding dimension mismatch: expected {self.dimension}, got {detected}"

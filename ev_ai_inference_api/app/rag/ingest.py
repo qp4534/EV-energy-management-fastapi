@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -36,8 +37,8 @@ class NormalizedChunk:
     source_type: str
     authority: str | None
     jurisdiction: str | None
-    effective_date: str | None
-    current_as_of: str | None
+    effective_date: date | None
+    current_as_of: date | None
     legal_status: str | None
     approved_for_deployment: bool
     content_hash: str
@@ -66,6 +67,27 @@ def _approved(record: dict[str, Any]) -> bool:
         and record.get("authority")
         and record.get("visibility") == "public"
     )
+
+
+def _optional_date(
+    value: Any,
+    *,
+    field_name: str,
+    source_path: Path,
+    line_number: int,
+) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as exc:
+        raise ValueError(
+            f"{source_path}:{line_number}: {field_name} must be YYYY-MM-DD"
+        ) from exc
 
 
 def normalize_record(
@@ -112,11 +134,17 @@ def normalize_record(
         jurisdiction=(
             str(record["jurisdiction"]) if record.get("jurisdiction") else None
         ),
-        effective_date=(
-            str(record["effective_date"]) if record.get("effective_date") else None
+        effective_date=_optional_date(
+            record.get("effective_date"),
+            field_name="effective_date",
+            source_path=source_path,
+            line_number=line_number,
         ),
-        current_as_of=(
-            str(record["current_as_of"]) if record.get("current_as_of") else None
+        current_as_of=_optional_date(
+            record.get("current_as_of"),
+            field_name="current_as_of",
+            source_path=source_path,
+            line_number=line_number,
         ),
         legal_status=(
             str(record["legal_status"]) if record.get("legal_status") else None
