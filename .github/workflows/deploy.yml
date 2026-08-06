@@ -1,0 +1,78 @@
+name: Build and Deploy FastAPI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE: qp4534/ev-energy-management-fastapi
+  GITOPS_REPOSITORY: qp4534/EV-energy-management-gitops
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: qp4534
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ev_ai_inference_api
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+
+      - name: Create FastAPI RDS secret in EKS
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          FASTAPI_DATABASE_URL: ${{ secrets.FASTAPI_DATABASE_URL }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          FASTAPI_DATABASE_URL_B64="$(printf '%s' "$FASTAPI_DATABASE_URL" | base64 -w0)"
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "export KUBECONFIG=~/.kube/config
+             kubectl create namespace fastapi --dry-run=client -o yaml | kubectl apply -f -
+             DATABASE_URL=\$(printf '%s' '$FASTAPI_DATABASE_URL_B64' | base64 -d)
+             kubectl create secret generic fastapi-secret -n fastapi \
+               --from-literal=DATABASE_URL=\"\$DATABASE_URL\" \
+               --dry-run=client -o yaml | kubectl apply -f -"
+
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPOSITORY }}
+          token: ${{ secrets.GITOPS_PUSH_TOKEN }}
+          path: gitops
+
+      - name: Update FastAPI image tag in GitOps
+        run: |
+          sed -i "s#image: ${{ env.IMAGE }}:.*#image: ${{ env.IMAGE }}:${{ github.sha }}#" gitops/apps/fastapi/deployment.yaml
+          cd gitops
+          git config user.name "fastapi-deploy-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -am "fastapi image -> ${{ github.sha }}" || echo "no changes"
+          git push
+
+      - name: Register FastAPI application in Argo CD
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "export KUBECONFIG=~/.kube/config
+             kubectl apply -f https://raw.githubusercontent.com/${{ env.GITOPS_REPOSITORY }}/main/argocd/fastapi-application.yaml"
