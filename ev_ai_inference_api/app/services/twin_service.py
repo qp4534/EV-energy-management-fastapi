@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.twin_redis import TwinRedisStore
+from app.db.anomaly_persistence import AnomalyPersistence
 from app.db.repository import TwinRepository
 from app.schemas.current_stage import SampleRequest
 from app.schemas.twins import (
@@ -31,6 +32,12 @@ _STAGE_LEVEL = {
     "warning": 2,
     "emergency": 3,
     "unknown": 0,
+}
+_LEVEL_STAGE = {
+    0: "normal",
+    1: "caution",
+    2: "warning",
+    3: "emergency",
 }
 
 
@@ -82,6 +89,7 @@ def _model_request(payload: TwinSampleRequest) -> SampleRequest:
     saturated = sum(value >= 150.0 for value in temperatures_c)
     return SampleRequest(
         timestamp_seconds=payload.observed_at.timestamp(),
+        session_id=payload.session_id,
         voltage_v=sum(voltages_v) / len(voltages_v),
         temp_mean_c=sum(temperatures_c) / len(temperatures_c),
         temp_max_c=maximum,
@@ -93,7 +101,10 @@ def _model_request(payload: TwinSampleRequest) -> SampleRequest:
         ambient_temp_c=payload.ambient_temperature_c,
         pack_current_a=payload.pack_current_a,
         cell_voltages_v=voltages_v,
+        temperature_decic=list(payload.temperature_decic),
+        connector_temperature_decic=list(payload.connector_temperature_decic),
         charging_gun_temperature_c=max(payload.connector_temperature_decic) / 10.0,
+        observed_at=payload.observed_at,
     )
 
 
@@ -106,6 +117,7 @@ class TwinService:
         repository: TwinRepository | None = None,
         thermal_inference: ThermalInferenceClient | None = None,
         minimum_image_confidence: float = 0.70,
+        anomaly_persistence: AnomalyPersistence | None = None,
     ) -> None:
         self.current_stage = current_stage
         self.redis = redis_store
@@ -113,6 +125,7 @@ class TwinService:
         self.repository = repository or TwinRepository()
         self.thermal_inference = thermal_inference or ThermalInferenceClient()
         self.minimum_image_confidence = minimum_image_confidence
+        self.anomaly_persistence = anomaly_persistence
         self._locks: dict[str, asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
 
@@ -140,7 +153,12 @@ class TwinService:
         lock = await self._vehicle_lock(vehicle_id)
         async with lock:
             latest = await self.redis.get_latest(vehicle_id)
-            if latest is not None:
+            session_changed = (
+                latest is not None and payload.session_id != latest.session_id
+            )
+            if session_changed:
+                await self.current_stage.reset(vehicle_id)
+            elif latest is not None:
                 if payload.sequence != latest.sequence + 1:
                     raise TwinSequenceConflict(
                         "sequence must advance by exactly one at 1 Hz"
@@ -150,9 +168,8 @@ class TwinService:
                     raise TwinSequenceConflict(
                         "observed_at must advance by exactly one second at 1 Hz"
                     )
-            result = await self.current_stage.evaluate(
-                vehicle_id, _model_request(payload)
-            )
+            model_request = _model_request(payload)
+            result = await self.current_stage.evaluate(vehicle_id, model_request)
             ml_level = (
                 None
                 if result.ml_pattern_stage is None
@@ -191,6 +208,7 @@ class TwinService:
             )
             frame = TwinFrame(
                 vehicle_id=vehicle_id,
+                session_id=payload.session_id,
                 observed_at=payload.observed_at,
                 sequence=payload.sequence,
                 temperature_decic=list(payload.temperature_decic),
@@ -219,6 +237,30 @@ class TwinService:
                 thermal_frame_sha256=fused["thermal_frame_sha256"],
                 fusion_source=fused["fusion_source"],
             )
+            if self.anomaly_persistence is not None and frame.final_risk_level > 0:
+                persistence_payload = model_request.model_copy(
+                    update={
+                        "hotspot_cell_index": frame.hotspot_cell_index,
+                        "hotspot_connector_index": frame.hotspot_connector_index,
+                        "image_risk_level": frame.image_risk_level,
+                        "image_confidence": frame.image_confidence,
+                        "source_image_ref": frame.thermal_frame_ref,
+                    }
+                )
+                persistence_result = result.model_copy(
+                    update={
+                        "physical_rule_level": _LEVEL_STAGE[frame.physics_risk_level],
+                        "final_safety_alert": _LEVEL_STAGE[frame.final_risk_level],
+                    }
+                )
+                anomaly_id = await self.anomaly_persistence.persist_if_anomalous(
+                    vehicle_id,
+                    persistence_payload,
+                    persistence_result,
+                    frame,
+                )
+                if anomaly_id is not None:
+                    frame = frame.model_copy(update={"anomaly_id": anomaly_id})
             await self.redis.publish(frame)
             return frame
 

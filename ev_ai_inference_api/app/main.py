@@ -40,7 +40,8 @@ async def lifespan(app: FastAPI):
         redis_store = TwinRedisStore(redis)
         app.state.database_engine = engine
         app.state.database_sessions = sessions
-        app.state.anomaly_persistence = AnomalyPersistence(sessions)
+        anomaly_persistence = AnomalyPersistence(sessions)
+        app.state.anomaly_persistence = anomaly_persistence
         app.state.anomaly_persistence_enabled = settings.anomaly_persistence_enabled
         app.state.twin_redis = redis_store
         app.state.twin_service = TwinService(
@@ -52,6 +53,11 @@ async def lifespan(app: FastAPI):
                 settings.thermal_inference_url,
                 settings.thermal_inference_token,
                 settings.thermal_inference_timeout_seconds,
+            ),
+            anomaly_persistence=(
+                anomaly_persistence
+                if settings.anomaly_persistence_enabled
+                else None
             ),
         )
         if settings.twin_infra_required:

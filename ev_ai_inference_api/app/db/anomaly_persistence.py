@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.schemas.current_stage import CurrentStageResponse, SampleRequest
+from app.schemas.twins import TwinFrame
 
 
 ALERT_RISK_TEXT = {
@@ -34,6 +35,7 @@ class AnomalyPersistence:
         car_id: str,
         payload: SampleRequest,
         inference: CurrentStageResponse,
+        twin_frame: TwinFrame | None = None,
     ) -> str | None:
         alert = inference.final_safety_alert
         if alert not in ALERT_RISK_TEXT:
@@ -52,10 +54,23 @@ class AnomalyPersistence:
             if inference.ml_pattern_stage is not None
             else None
         )
-        raw_metrics = json.dumps(
+        raw_metrics_payload = {
+            "request": payload.model_dump(mode="json", exclude_none=True),
+            "inference": inference.model_dump(mode="json", exclude_none=True),
+        }
+        if twin_frame is not None:
+            raw_metrics_payload["twin_frame"] = twin_frame.model_dump(
+                mode="json", exclude_none=True
+            )
+        raw_metrics = json.dumps(raw_metrics_payload, ensure_ascii=False)
+        model_input = json.dumps(
             {
-                "request": payload.model_dump(mode="json", exclude_none=True),
-                "inference": inference.model_dump(mode="json", exclude_none=True),
+                "voltage_v": payload.voltage_v,
+                "temp_mean_c": payload.temp_mean_c,
+                "temp_max_c": payload.temp_max_c,
+                "temp_delta_c": payload.temp_delta_c,
+                "temp_saturation_fraction": payload.temp_saturation_fraction,
+                "temp_saturation_all": payload.temp_saturation_all,
             },
             ensure_ascii=False,
         )
@@ -66,10 +81,10 @@ class AnomalyPersistence:
                     '''
                     INSERT INTO public."ANOMALY_LOGS"
                         (abnormal_type, source_type, trigger_value, detected_at,
-                         risk_level, car_id)
+                         risk_level, car_id, session_id)
                     VALUES
                         (:abnormal_type, :source_type, :trigger_value, :detected_at,
-                         :risk_level, CAST(:car_id AS uuid))
+                         :risk_level, CAST(:car_id AS uuid), CAST(:session_id AS uuid))
                     RETURNING anomaly_id
                     '''
                 ),
@@ -80,6 +95,7 @@ class AnomalyPersistence:
                     "detected_at": observed_at,
                     "risk_level": ALERT_RISK_TEXT[alert],
                     "car_id": car_id,
+                    "session_id": str(payload.session_id) if payload.session_id else None,
                 },
             )
             await session.execute(
@@ -88,13 +104,14 @@ class AnomalyPersistence:
                     INSERT INTO public."TWIN_FRAMES"
                         (observed_at, hotspot_cell_index, hotspot_connector_index,
                          ml_risk_level, physics_risk_level, final_risk_level,
-                         image_risk_level, image_confidence, raw_metrics,
-                         anomaly_id, car_id, source_image_ref)
+                         image_risk_level, image_confidence, raw_metrics, model_input,
+                         anomaly_id, car_id, session_id, source_image_ref)
                     VALUES
                         (:observed_at, :hotspot_cell_index, :hotspot_connector_index,
                          :ml_risk_level, :physics_risk_level, :final_risk_level,
                          :image_risk_level, :image_confidence, CAST(:raw_metrics AS jsonb),
-                         :anomaly_id, CAST(:car_id AS uuid), :source_image_ref)
+                         CAST(:model_input AS jsonb), :anomaly_id, CAST(:car_id AS uuid),
+                         CAST(:session_id AS uuid), :source_image_ref)
                     '''
                 ),
                 {
@@ -107,8 +124,10 @@ class AnomalyPersistence:
                     "image_risk_level": payload.image_risk_level,
                     "image_confidence": payload.image_confidence,
                     "raw_metrics": raw_metrics,
+                    "model_input": model_input,
                     "anomaly_id": anomaly_id,
                     "car_id": car_id,
+                    "session_id": str(payload.session_id) if payload.session_id else None,
                     "source_image_ref": payload.source_image_ref,
                 },
             )
