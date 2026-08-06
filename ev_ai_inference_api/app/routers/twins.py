@@ -85,6 +85,21 @@ async def risk_vehicles(request: Request) -> RiskVehicleListResponse:
 
 
 @router.get(
+    "/vehicles/{vehicle_id}/latest",
+    response_model=TwinFrame,
+)
+async def latest(vehicle_id: str, request: Request) -> TwinFrame:
+    try:
+        return await _service(request).latest(vehicle_id)
+    except InvalidVehicleId as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IncidentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RedisError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="Redis unavailable") from exc
+
+
+@router.get(
     "/vehicles/{vehicle_id}/incidents",
     response_model=IncidentListResponse,
 )

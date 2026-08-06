@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,8 +27,14 @@ ALERT_RISK_NUMBER = {
 class AnomalyPersistence:
     """Writes only abnormal current-stage results to the shared ERD tables."""
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        enqueue_report_jobs: bool = False,
+    ) -> None:
         self._sessions = sessions
+        self._enqueue_report_jobs = enqueue_report_jobs
 
     async def persist_if_anomalous(
         self,
@@ -131,4 +137,25 @@ class AnomalyPersistence:
                     "source_image_ref": payload.source_image_ref,
                 },
             )
+            if self._enqueue_report_jobs:
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO ai_report_jobs (
+                            job_id, job_key, job_type, car_id, anomaly_id,
+                            status, available_at
+                        ) VALUES (
+                            :job_id, :job_key, 'ANOMALY', CAST(:car_id AS uuid),
+                            :anomaly_id, 'PENDING', NOW()
+                        )
+                        ON CONFLICT (job_key) DO NOTHING
+                        """
+                    ),
+                    {
+                        "job_id": uuid4(),
+                        "job_key": f"ANOMALY:{anomaly_id}",
+                        "car_id": car_id,
+                        "anomaly_id": anomaly_id,
+                    },
+                )
         return str(anomaly_id)
