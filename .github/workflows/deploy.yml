@@ -31,23 +31,52 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
 
-      - name: Create FastAPI RDS secret in EKS
+      - name: Create FastAPI runtime secrets in EKS
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           EC2_HOST: ${{ secrets.EC2_HOST }}
           FASTAPI_DATABASE_URL: ${{ secrets.FASTAPI_DATABASE_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
           chmod 600 ~/.ssh/deploy_key.pem
           FASTAPI_DATABASE_URL_B64="$(printf '%s' "$FASTAPI_DATABASE_URL" | base64 -w0)"
+          DEEPSEEK_API_KEY_B64="$(printf '%s' "$DEEPSEEK_API_KEY" | base64 -w0)"
           ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
             "export KUBECONFIG=~/.kube/config
              kubectl create namespace fastapi --dry-run=client -o yaml | kubectl apply -f -
              DATABASE_URL=\$(printf '%s' '$FASTAPI_DATABASE_URL_B64' | base64 -d)
+             DEEPSEEK_API_KEY=\$(printf '%s' '$DEEPSEEK_API_KEY_B64' | base64 -d)
              kubectl create secret generic fastapi-secret -n fastapi \
                --from-literal=DATABASE_URL=\"\$DATABASE_URL\" \
+               --from-literal=DEEPSEEK_API_KEY=\"\$DEEPSEEK_API_KEY\" \
                --dry-run=client -o yaml | kubectl apply -f -"
+
+      - name: Run FastAPI database migrations
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          MIGRATION_JOB="fastapi-migrate-${GITHUB_SHA::8}"
+          MIGRATION_MANIFEST_B64="$(sed \
+            -e "s#REPLACE_WITH_JOB_NAME#$MIGRATION_JOB#g" \
+            -e "s#REPLACE_WITH_IMAGE_URI#${{ env.IMAGE }}:${{ github.sha }}#g" \
+            ev_ai_inference_api/k8s/migration-job.yaml | base64 -w0)"
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "export KUBECONFIG=~/.kube/config
+             kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true
+             printf '%s' '$MIGRATION_MANIFEST_B64' | base64 -d | kubectl apply -f -
+             if ! kubectl wait --for=condition=complete job/'$MIGRATION_JOB' \
+               -n fastapi --timeout=300s; then
+               kubectl logs job/'$MIGRATION_JOB' -n fastapi || true
+               exit 1
+             fi
+             kubectl logs job/'$MIGRATION_JOB' -n fastapi
+             kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true"
 
       - name: Checkout GitOps repository
         uses: actions/checkout@v4
@@ -58,7 +87,9 @@ jobs:
 
       - name: Update FastAPI image tag in GitOps
         run: |
-          sed -i "s#image: ${{ env.IMAGE }}:.*#image: ${{ env.IMAGE }}:${{ github.sha }}#" gitops/apps/fastapi/deployment.yaml
+          python ev_ai_inference_api/scripts/update_gitops_fastapi_deployment.py \
+            --path gitops/apps/fastapi/deployment.yaml \
+            --image "${{ env.IMAGE }}:${{ github.sha }}"
           cd gitops
           git config user.name "fastapi-deploy-bot"
           git config user.email "actions@users.noreply.github.com"

@@ -1,4 +1,4 @@
 -r requirements.txt
 
-# Installed only in chatbot/report images; realtime inference keeps its lean image.
+# AI dependencies for the combined AWS image and the optional chatbot/report image.
 sentence-transformers>=5.0,<6.0

@@ -1,68 +1,105 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 
 from app.ai.config import AISettings
-from app.ai.deepseek import DeepSeekClient
-from app.chatbot.schemas import ChatMessageRequest, ChatMessageResponse
+from app.chatbot.router import router as chatbot_router
+from app.chatbot.runtime import AIRuntime, create_ai_runtime
 from app.chatbot.service import ChatbotService
-from app.chatbot.supervisor import ChatSupervisor
-from app.chatbot.vehicle_client import InferenceVehicleStateClient
-from app.db.session import create_database
-from app.rag.embedding import SentenceTransformerEmbedder
-from app.rag.repository import PostgresRagRepository
 
 
-def create_chatbot_app(service: ChatbotService | None = None) -> FastAPI:
+LOGGER = logging.getLogger("ev-ai-chatbot")
+ReportWorkerRunner = Callable[[asyncio.Event], Awaitable[None]]
+
+
+def create_chatbot_app(
+    service: ChatbotService | None = None,
+    report_worker_runner: ReportWorkerRunner | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.ready = False
-        deepseek = None
-        vehicle_client = None
-        engine = None
+        app.state.report_worker_enabled = False
+        app.state.report_worker_running = False
+        app.state.report_worker_error = None
+        app.state.ai_ready = False
+        runtime: AIRuntime | None = None
+        report_worker_stop = None
+        report_worker_task = None
+
         if service is not None:
             app.state.chatbot_service = service
-            app.state.settings = service.settings
-            app.state.ready = True
-            yield
-            return
+            settings = service.settings
+        else:
+            settings = AISettings.load()
+            runtime = create_ai_runtime(settings)
+            app.state.chatbot_service = runtime.chatbot_service
 
-        settings = AISettings.load()
         app.state.settings = settings
-        engine, sessions = create_database(settings.database_url)
-        embedder = SentenceTransformerEmbedder(
-            settings.embedding_model,
-            dimension=settings.embedding_dimension,
-            batch_size=settings.embedding_batch_size,
-        )
-        rag = PostgresRagRepository(sessions, embedder, settings)
-        deepseek = DeepSeekClient(settings)
-        vehicle_client = InferenceVehicleStateClient(
-            settings.inference_base_url,
-            timeout_seconds=settings.vehicle_state_timeout_seconds,
-            internal_token=settings.internal_api_token,
-        )
-        app.state.chatbot_service = ChatbotService(
-            ChatSupervisor(), rag, deepseek, vehicle_client, settings
-        )
+        app.state.ai_settings = settings
+        app.state.ai_ready = True
+
+        app.state.report_worker_enabled = settings.report_worker_enabled
+        if settings.report_worker_enabled:
+            report_worker_stop = asyncio.Event()
+            if report_worker_runner is not None:
+                report_worker_coroutine = report_worker_runner(report_worker_stop)
+            else:
+                if runtime is None:
+                    raise RuntimeError(
+                        "an injected chatbot service requires an injected report worker"
+                    )
+                report_worker_coroutine = runtime.run_report_worker(
+                    report_worker_stop
+                )
+            report_worker_task = asyncio.create_task(
+                report_worker_coroutine,
+                name="ai-report-worker",
+            )
+            app.state.report_worker_running = True
+
+            def record_worker_result(task: asyncio.Task[None]) -> None:
+                app.state.report_worker_running = False
+                if task.cancelled():
+                    return
+                error = task.exception()
+                if error is not None:
+                    app.state.report_worker_error = str(error)
+                    LOGGER.error(
+                        "report worker stopped unexpectedly",
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
+
+            report_worker_task.add_done_callback(record_worker_result)
+
         app.state.ready = True
         try:
             yield
         finally:
-            if vehicle_client is not None:
-                await vehicle_client.close()
-            if deepseek is not None:
-                await deepseek.close()
-            if engine is not None:
-                await engine.dispose()
+            if report_worker_stop is not None:
+                report_worker_stop.set()
+            if report_worker_task is not None:
+                try:
+                    await report_worker_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    # The completion callback already captured and logged the failure.
+                    pass
+            if runtime is not None:
+                await runtime.close()
 
     application = FastAPI(
         title="EV User Chatbot API",
         version="1.0.0",
         lifespan=lifespan,
     )
+    application.include_router(chatbot_router)
 
     @application.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -72,28 +109,18 @@ def create_chatbot_app(service: ChatbotService | None = None) -> FastAPI:
     async def readyz(request: Request) -> dict[str, object]:
         if not getattr(request.app.state, "ready", False):
             raise HTTPException(status_code=503, detail="chatbot is not ready")
+        if (
+            getattr(request.app.state, "report_worker_enabled", False)
+            and not getattr(request.app.state, "report_worker_running", False)
+        ):
+            raise HTTPException(status_code=503, detail="report worker is not running")
         settings: AISettings = request.app.state.settings
         return {
             "status": "ok",
             "deepseekConfigured": settings.deepseek_configured,
+            "reportWorkerEnabled": request.app.state.report_worker_enabled,
+            "reportWorkerRunning": request.app.state.report_worker_running,
         }
-
-    @application.post(
-        "/v1/chat/messages",
-        response_model=ChatMessageResponse,
-        response_model_by_alias=True,
-    )
-    async def chat(
-        payload: ChatMessageRequest,
-        request: Request,
-        x_internal_token: str | None = Header(default=None),
-    ) -> ChatMessageResponse:
-        settings: AISettings = request.app.state.settings
-        if settings.internal_api_token and x_internal_token != settings.internal_api_token:
-            raise HTTPException(status_code=401, detail="invalid internal token")
-        if not getattr(request.app.state, "ready", False):
-            raise HTTPException(status_code=503, detail="chatbot is not ready")
-        return await request.app.state.chatbot_service.answer(payload)
 
     return application
 

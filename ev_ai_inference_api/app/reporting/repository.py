@@ -359,7 +359,7 @@ class PostgresReportRepository:
                     "report_id": report_id,
                     "title": title,
                     "report_data": report_json,
-                    "report_type": job.job_type.value,
+                    "report_type": report.report_type.public_value,
                     "car_id": job.car_id,
                     "anomaly_id": job.anomaly_id,
                 },

@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 def _to_camel(value: str) -> str:
@@ -23,6 +23,10 @@ class ApiModel(BaseModel):
 class ReportType(StrEnum):
     ANOMALY = "ANOMALY"
     MONTHLY = "MONTHLY"
+
+    @property
+    def public_value(self) -> str:
+        return "이상" if self is ReportType.ANOMALY else "월간보고서"
 
 
 class ReportSource(ApiModel):
@@ -60,6 +64,10 @@ class GeneratedReport(ApiModel):
     sources: list[ReportSource] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
     actions: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_serializer("report_type")
+    def serialize_report_type(self, value: ReportType) -> str:
+        return value.public_value
 
 
 class NarrativeEnhancement(BaseModel):

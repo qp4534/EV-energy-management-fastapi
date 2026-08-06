@@ -12,8 +12,8 @@ class EmbeddingDependencyMissing(RuntimeError):
 class SentenceTransformerEmbedder:
     """Lazy multilingual-e5 embedder.
 
-    The large ML dependency is imported only by chatbot/ingestion processes, so
-    the existing realtime inference API does not pay its startup or memory cost.
+    The large ML dependency and model are loaded only on the first RAG request,
+    so API startup does not eagerly allocate the embedding model.
     """
 
     def __init__(

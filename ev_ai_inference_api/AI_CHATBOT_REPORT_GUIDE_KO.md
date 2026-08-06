@@ -1,12 +1,13 @@
 # 챗봇·AI 보고서 기능 가이드
 
-이 저장소에는 기존 실시간 배터리 안전 추론과 별도로 실행되는 두 기능이 포함되어 있다.
+AWS 기본 이미지는 하나의 `app.main:app` 프로세스에서 안전 추론, 챗봇, 보고서 Worker를 함께 실행한다.
 
-- 사용자 챗봇: `app.chatbot.main:app`
+- 통합 AWS API: `app.main:app`
+- 사용자 챗봇·자동 보고서 Worker 단독 실행(선택): `app.chatbot.main:app`
 - 월간·이상 보고서 작업 API: `app.reporting.main:app`
-- 월간·이상 보고서 Worker: `python -m app.reporting.worker`
+- 월간·이상 보고서 Worker 단독 실행(선택): `python -m app.reporting.worker`
 
-세 기능은 같은 Git 저장소를 사용하지만 프로세스는 분리한다. DeepSeek나 임베딩 지연이 기존 1 Hz 안전 추론을 막지 않게 하기 위해서다.
+기본 `Dockerfile`은 현재 GitHub Actions가 빌드하는 이미지이며 `EMBEDDED_AI_ENABLED=true`와 `REPORT_WORKER_ENABLED=true`를 설정한다. 따라서 AWS에서는 별도 Worker 명령 없이 챗봇과 보고서 Worker가 자동 시작된다. 사용량이 증가하면 `Dockerfile.ai`로 AI 기능만 다시 분리할 수 있다.
 
 ## 데이터 흐름
 
@@ -42,7 +43,7 @@ GET /api/v1/twins/vehicles/{vehicle_id}/latest
 ```text
 이상 이벤트 또는 월간 스케줄
 → ai_report_jobs 작업 생성
-→ 별도 Worker가 작업 선점
+→ FastAPI 백그라운드 Worker가 작업 선점
 → 업무 DB에서 사실·수치 집계
 → RAG에서 안전 근거 검색
 → DeepSeek는 설명 문장만 생성
@@ -92,17 +93,23 @@ python -m app.rag.ingest "C:\path\to\docs\rag"
 
 ## 실행 프로세스
 
-기존 안전 추론:
+AWS 기본 통합 실행(안전 추론·챗봇·보고서 Worker):
 
 ```powershell
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-챗봇:
+`Dockerfile`에는 `EMBEDDED_AI_ENABLED=true`, `REPORT_JOBS_ENABLED=true`, `REPORT_WORKER_ENABLED=true`가 기본 설정되어 있다. 현재 GitHub Actions가 이 Dockerfile을 빌드하므로 코드를 배포하면 세 기능이 함께 시작된다.
+
+배포 Workflow는 새 이미지로 `alembic upgrade head`를 먼저 실행한 뒤, 외부 GitOps Deployment에 통합 AI 환경변수, DeepSeek Secret 참조, 2Gi 요청/4Gi 메모리 상한과 새 이미지 태그를 함께 반영한다. 마이그레이션 실패 시 새 이미지는 배포하지 않는다.
+
+챗봇·보고서 Worker만 단독 실행(선택):
 
 ```powershell
 uvicorn app.chatbot.main:app --host 0.0.0.0 --port 8001 --workers 1
 ```
+
+`Dockerfile.ai`에도 자동 Worker 설정이 있어 위 FastAPI가 시작되면 Worker가 함께 시작된다. 통합·단독 실행 모두 챗봇과 Worker가 같은 DB 연결 풀, RAG 검색기, 임베딩 모델, DeepSeek 클라이언트를 공유한다.
 
 보고서 작업 API:
 
@@ -110,13 +117,13 @@ uvicorn app.chatbot.main:app --host 0.0.0.0 --port 8001 --workers 1
 uvicorn app.reporting.main:app --host 0.0.0.0 --port 8002 --workers 1
 ```
 
-보고서 Worker:
+보고서 Worker 단독 실행(개발·장애 대응용 선택 사항):
 
 ```powershell
 python -m app.reporting.worker
 ```
 
-기존 추론 이미지는 `Dockerfile`, 챗봇·보고서 이미지는 `Dockerfile.ai`를 사용한다. AI 이미지에만 `sentence-transformers`를 설치해 실시간 추론 이미지 크기와 메모리 사용을 늘리지 않는다.
+현재 운영 기본 이미지는 `Dockerfile`이며 안전 추론·챗봇·자동 보고서 Worker에 필요한 의존성을 모두 설치한다. `Dockerfile.ai`는 추후 AI 기능을 별도 서비스로 분리할 때 사용할 수 있다. 두 이미지 모두 별도 Worker 명령이 필요 없다.
 
 ## 런타임 설정 이름
 
@@ -134,6 +141,8 @@ python -m app.reporting.worker
 | `INFERENCE_BASE_URL` | 기존 안전 추론 FastAPI 주소 |
 | `AI_INTERNAL_TOKEN` | Spring과 내부 AI API 사이 선택적 토큰 |
 | `REPORT_JOBS_ENABLED` | 이상 저장 트랜잭션에서 보고서 작업도 생성할지 여부 |
+| `EMBEDDED_AI_ENABLED` | 기본 `app.main:app`에 챗봇·보고서 AI 런타임 포함 여부. `Dockerfile` 기본 `true` |
+| `REPORT_WORKER_ENABLED` | FastAPI 안에서 보고서 Worker 자동 실행 여부. Docker 이미지 기본 `true` |
 | `RAG_ALLOW_DRAFTS` | 기본 `false`; 운영에서는 그대로 유지 |
 
 애플리케이션 코드는 `.env` 파일을 직접 만들거나 읽지 않는다. 런타임이 환경변수를 주입한다.
@@ -196,6 +205,10 @@ POST /internal/v1/report-jobs/monthly
 
 - `ANOMALY:{anomaly_id}`
 - `MONTHLY:{car_id}:{YYYY-MM}`
+
+위 영문 값은 작업 큐 내부 식별자다. 실제 운영 DB의
+`AI_REPORTS.report_type`과 보고서 JSON의 `reportType`에는 프론트 필터와
+동일하게 `월간보고서` 또는 `이상`을 저장한다.
 
 Worker는 `FOR UPDATE SKIP LOCKED`로 작업을 선점하며 실패 시 최대 횟수까지 재시도한다. 저장되는 `report_id`도 작업 키에서 결정적으로 생성해 작업 재실행으로 보고서가 중복되지 않게 한다.
 

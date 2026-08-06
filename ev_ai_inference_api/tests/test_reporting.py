@@ -1,13 +1,15 @@
+import asyncio
 from datetime import date, datetime, timezone
 from uuid import UUID
 
 import pytest
 
+from app.ai.config import AISettings
 from app.ai.contracts import RetrievedChunk
 from app.reporting.repository import ReportJob
 from app.reporting.schemas import ReportType
 from app.reporting.service import ReportGenerationService
-from app.reporting.worker import previous_month
+from app.reporting.worker import previous_month, run_loop
 
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
@@ -103,6 +105,7 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
     _, report = await service.generate(job(ReportType.ANOMALY))
     payload = report.model_dump(mode="json", by_alias=True)
 
+    assert payload["reportType"] == "이상"
     assert report.risk_level == "WARNING"
     assert report.llm_enhanced is True
     metric_items = payload["sections"][1]["items"]
@@ -141,6 +144,7 @@ async def test_monthly_report_uses_deterministic_aggregates_when_llm_is_unavaila
 
     _, report = await service.generate(job(ReportType.MONTHLY))
 
+    assert report.model_dump(mode="json", by_alias=True)["reportType"] == "월간보고서"
     assert report.llm_enhanced is False
     assert report.risk_level == "CAUTION"
     metrics = report.sections[1].items
@@ -170,3 +174,33 @@ async def test_report_without_rag_does_not_call_freeform_llm() -> None:
 
     assert report.llm_enhanced is False
     assert "ragEvidence" in report.missing_fields
+
+
+@pytest.mark.asyncio
+async def test_embedded_report_worker_stops_without_waiting_for_poll_timeout() -> None:
+    stop_event = asyncio.Event()
+
+    class EmptyQueue:
+        async def requeue_stale_running(self):
+            return 0
+
+        async def enqueue_monthly_for_all(self, target_month):
+            stop_event.set()
+            return 0
+
+        async def claim_next(self):
+            return None
+
+    settings = AISettings(
+        database_url="postgresql+asyncpg://test",
+        report_worker_poll_seconds=60.0,
+    )
+
+    await run_loop(
+        EmptyQueue(),  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+        settings,
+        stop_event,
+    )
+
+    assert stop_event.is_set()

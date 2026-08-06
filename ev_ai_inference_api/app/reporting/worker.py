@@ -45,8 +45,50 @@ async def process_once(
     return True
 
 
-async def run() -> None:
+async def _wait_for_stop(stop_event: asyncio.Event, timeout_seconds: float) -> None:
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=timeout_seconds)
+    except TimeoutError:
+        pass
+
+
+async def run_loop(
+    repository: PostgresReportRepository,
+    service: ReportGenerationService,
+    settings: AISettings,
+    stop_event: asyncio.Event,
+) -> None:
+    next_monthly_check = 0.0
+    while not stop_event.is_set():
+        if time.monotonic() >= next_monthly_check:
+            try:
+                recovered = await repository.requeue_stale_running()
+                count = await repository.enqueue_monthly_for_all(
+                    previous_month(datetime.now(timezone.utc))
+                )
+                LOGGER.info(
+                    "ensured previous-month jobs for %d vehicles; recovered %d stale jobs",
+                    count,
+                    recovered,
+                )
+            except Exception:
+                LOGGER.exception("could not enqueue previous-month report jobs")
+            next_monthly_check = time.monotonic() + 3_600
+        processed = await process_once(
+            repository,
+            service,
+            max_retries=settings.report_worker_max_retries,
+        )
+        if not processed:
+            await _wait_for_stop(
+                stop_event,
+                settings.report_worker_poll_seconds,
+            )
+
+
+async def run(stop_event: asyncio.Event | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
+    stop_event = stop_event or asyncio.Event()
     settings = AISettings.load()
     engine, sessions = create_database(settings.database_url)
     repository = PostgresReportRepository(sessions)
@@ -59,29 +101,7 @@ async def run() -> None:
     deepseek = DeepSeekClient(settings)
     service = ReportGenerationService(repository, rag, deepseek)
     try:
-        next_monthly_check = 0.0
-        while True:
-            if time.monotonic() >= next_monthly_check:
-                try:
-                    recovered = await repository.requeue_stale_running()
-                    count = await repository.enqueue_monthly_for_all(
-                        previous_month(datetime.now(timezone.utc))
-                    )
-                    LOGGER.info(
-                        "ensured previous-month jobs for %d vehicles; recovered %d stale jobs",
-                        count,
-                        recovered,
-                    )
-                except Exception:
-                    LOGGER.exception("could not enqueue previous-month report jobs")
-                next_monthly_check = time.monotonic() + 3_600
-            processed = await process_once(
-                repository,
-                service,
-                max_retries=settings.report_worker_max_retries,
-            )
-            if not processed:
-                await asyncio.sleep(settings.report_worker_poll_seconds)
+        await run_loop(repository, service, settings, stop_event)
     finally:
         await deepseek.close()
         await engine.dispose()

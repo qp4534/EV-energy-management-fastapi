@@ -65,6 +65,8 @@ class AISettings:
     allow_general_fallback: bool = True
     report_worker_poll_seconds: float = 2.0
     report_worker_max_retries: int = 3
+    embedded_ai_enabled: bool = False
+    report_worker_enabled: bool = False
     internal_api_token: str = ""
 
     @property
@@ -138,5 +140,7 @@ class AISettings:
             report_worker_max_retries=_positive_int(
                 "REPORT_WORKER_MAX_RETRIES", 3
             ),
+            embedded_ai_enabled=_boolean("EMBEDDED_AI_ENABLED", False),
+            report_worker_enabled=_boolean("REPORT_WORKER_ENABLED", False),
             internal_api_token=os.getenv("AI_INTERNAL_TOKEN", "").strip(),
         )

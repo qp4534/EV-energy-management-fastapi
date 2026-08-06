@@ -3,7 +3,9 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HF_HOME=/app/runtime/huggingface
+    HF_HOME=/app/runtime/huggingface \
+    EMBEDDED_AI_ENABLED=true \
+    REPORT_WORKER_ENABLED=true
 
 WORKDIR /app
 
@@ -16,6 +18,6 @@ COPY --chown=app:app . .
 
 USER app
 
-# Override this command with app.reporting.worker for the report worker.
+# The chatbot API starts the report worker in its FastAPI lifespan.
 EXPOSE 8001
 CMD ["uvicorn", "app.chatbot.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

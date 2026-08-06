@@ -58,3 +58,25 @@ pytest -q
 
 현재 테스트는 모델 분류, 이상 결과만 저장 대상으로 전달되는 계약, 입력 검증을
 검사합니다.
+
+## AWS 기본 실행 구조
+
+기본 `Dockerfile`과 `app.main:app` 하나가 다음 기능을 함께 실행합니다.
+
+- 기존 BMS 안전 추론 API
+- 사용자 챗봇 `POST /v1/chat/messages`
+- 월간·이상 보고서 백그라운드 Worker
+
+Docker 이미지에는 `EMBEDDED_AI_ENABLED=true`, `REPORT_JOBS_ENABLED=true`,
+`REPORT_WORKER_ENABLED=true`가 기본 설정되어 있습니다. 따라서 GitHub Actions가
+기본 이미지를 배포하면 별도 Worker 명령 없이 함께 시작됩니다. 운영 비밀값인
+`DEEPSEEK_API_KEY`와 DB 접속 정보는 GitHub에 넣지 않고 Kubernetes Secret으로
+주입합니다.
+
+배포 Workflow는 새 이미지를 이용해 `alembic upgrade head`를 먼저 실행합니다.
+마이그레이션이 성공한 경우에만 GitOps 이미지 태그를 갱신하므로 RAG·보고서 작업
+테이블이 준비되지 않은 이미지가 서비스에 먼저 배포되지 않습니다.
+
+GitOps의 FastAPI Deployment도 `fastapi-secret`에서 `DEEPSEEK_API_KEY`를 읽고,
+통합 이미지에 최소 2GiB 요청/4GiB 상한을 주도록
+맞춰야 합니다. 이 저장소의 `ev_ai_inference_api/k8s/deployment.yaml`이 기준 예시입니다.
