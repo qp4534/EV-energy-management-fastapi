@@ -1,0 +1,72 @@
+name: Build and Deploy (rul-diagnosis)
+
+# rul-diagnosis 모델 파일(rul_model_B_no_cycle.joblib 304MB, fire_risk_model.joblib 125MB)은
+# GitHub 100MB 제한 때문에 이 저장소에 없다(.gitignore 처리). S3(ev-mgmt-ai-models 버킷)에
+# 올려두고, 빌드할 때만 내려받아 이미지 안에 구워넣는다 - 배포 방식은 backend/frontend와
+# 동일(런타임에 모델을 따로 받는 init container 같은 건 안 씀).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai-services/rul-diagnosis/**"
+      - ".github/workflows/deploy-rul-diagnosis.yml"
+  workflow_dispatch:
+
+env:
+  IMAGE: qp4534/ev-rul-diagnosis
+  SERVICE_DIR: ai-services/rul-diagnosis
+  MODEL_BUCKET: ev-mgmt-ai-models
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Download model files from S3
+        run: |
+          aws s3 cp s3://${{ env.MODEL_BUCKET }}/rul-diagnosis/rul_model_B_no_cycle.joblib \
+            ${{ env.SERVICE_DIR }}/rul_model_B_no_cycle.joblib
+          aws s3 cp s3://${{ env.MODEL_BUCKET }}/rul-diagnosis/fire_risk_model.joblib \
+            ${{ env.SERVICE_DIR }}/fire_risk_model.joblib
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: qp4534
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.SERVICE_DIR }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+
+      - name: Checkout gitops repo
+        uses: actions/checkout@v4
+        with:
+          repository: qp4534/EV-energy-management-gitops
+          token: ${{ secrets.GITOPS_PUSH_TOKEN }}
+          path: gitops
+
+      - name: Update image tag in gitops repo
+        run: |
+          sed -i "s#image: ${{ env.IMAGE }}:.*#image: ${{ env.IMAGE }}:${{ github.sha }}#" \
+            gitops/apps/rul-diagnosis/deployment.yaml
+          cd gitops
+          git config user.name "rul-diagnosis-deploy-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -am "rul-diagnosis image -> ${{ github.sha }}" || echo "no changes"
+          git push
