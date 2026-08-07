@@ -1,0 +1,258 @@
+name: Build and Deploy FastAPI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE: qp4534/ev-energy-management-fastapi
+  GITOPS_REPOSITORY: qp4534/EV-energy-management-gitops
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: qp4534
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ev_ai_inference_api
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+
+      - name: Create FastAPI runtime secrets in EKS
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          FASTAPI_DATABASE_URL: ${{ secrets.FASTAPI_DATABASE_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          FASTAPI_DATABASE_URL_B64="$(printf '%s' "$FASTAPI_DATABASE_URL" | base64 -w0)"
+          DEEPSEEK_API_KEY_B64="$(printf '%s' "$DEEPSEEK_API_KEY" | base64 -w0)"
+          ssh -i ~/.ssh/deploy_key.pem \
+            -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=30 \
+            "ubuntu@$EC2_HOST" \
+            "export KUBECONFIG=~/.kube/config
+             kubectl create namespace fastapi --dry-run=client -o yaml | kubectl apply -f -
+             DATABASE_URL=\$(printf '%s' '$FASTAPI_DATABASE_URL_B64' | base64 -d)
+             DEEPSEEK_API_KEY=\$(printf '%s' '$DEEPSEEK_API_KEY_B64' | base64 -d)
+             kubectl create secret generic fastapi-secret -n fastapi \
+               --from-literal=DATABASE_URL=\"\$DATABASE_URL\" \
+               --from-literal=DEEPSEEK_API_KEY=\"\$DEEPSEEK_API_KEY\" \
+               --dry-run=client -o yaml | kubectl apply -f -"
+
+      - name: Run FastAPI database migrations
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          MIGRATION_JOB="fastapi-migrate-${GITHUB_SHA::8}"
+          MIGRATION_MANIFEST_B64="$(sed \
+            -e "s#REPLACE_WITH_JOB_NAME#$MIGRATION_JOB#g" \
+            -e "s#REPLACE_WITH_IMAGE_URI#${{ env.IMAGE }}:${{ github.sha }}#g" \
+            ev_ai_inference_api/k8s/migration-job.yaml | base64 -w0)"
+          ssh -i ~/.ssh/deploy_key.pem \
+            -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=30 \
+            "ubuntu@$EC2_HOST" \
+            "export KUBECONFIG=~/.kube/config
+             kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true
+             printf '%s' '$MIGRATION_MANIFEST_B64' | base64 -d | kubectl apply -f -
+             for attempt in \$(seq 1 180); do
+               if ! kubectl get job '$MIGRATION_JOB' -n fastapi >/dev/null 2>&1; then
+                 echo 'Migration job disappeared before completion.'
+                 exit 1
+               fi
+               succeeded=\$(kubectl get job '$MIGRATION_JOB' -n fastapi -o jsonpath='{.status.succeeded}')
+               failed=\$(kubectl get job '$MIGRATION_JOB' -n fastapi -o jsonpath='{.status.failed}')
+               if [ "\$succeeded" = '1' ]; then
+                 kubectl logs job/'$MIGRATION_JOB' -n fastapi
+                 kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true
+                 exit 0
+               fi
+               if [ -n "\$failed" ] && [ "\$failed" -gt 0 ]; then
+                 echo 'FastAPI database migration failed.'
+                 kubectl logs job/'$MIGRATION_JOB' -n fastapi || true
+                 kubectl describe job '$MIGRATION_JOB' -n fastapi || true
+                 exit 1
+               fi
+               sleep 5
+             done
+             echo 'Timed out waiting for FastAPI database migration.'
+             kubectl logs job/'$MIGRATION_JOB' -n fastapi || true
+             kubectl describe job '$MIGRATION_JOB' -n fastapi || true
+             exit 1"
+
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPOSITORY }}
+          token: ${{ secrets.GITOPS_PUSH_TOKEN }}
+          path: gitops
+
+      - name: Update FastAPI image tag in GitOps
+        run: |
+          python ev_ai_inference_api/scripts/update_gitops_fastapi_deployment.py \
+            --path gitops/apps/fastapi/deployment.yaml \
+            --image "${{ env.IMAGE }}:${{ github.sha }}"
+          cd gitops
+          git config user.name "fastapi-deploy-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -am "fastapi image -> ${{ github.sha }}" || echo "no changes"
+          git push
+
+      - name: Register FastAPI application in Argo CD
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "export KUBECONFIG=~/.kube/config
+             kubectl apply -f https://raw.githubusercontent.com/${{ env.GITOPS_REPOSITORY }}/main/argocd/fastapi-application.yaml"
+
+      - name: Verify FastAPI rollout
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "set -eu
+             export KUBECONFIG=~/.kube/config
+             target_image='${{ env.IMAGE }}:${{ github.sha }}'
+             for attempt in \$(seq 1 30); do
+               deployed_image=\$(kubectl get deployment ev-ai-inference-api -n fastapi -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+               if [ \"\$deployed_image\" = \"\$target_image\" ]; then
+                 break
+               fi
+               sleep 10
+             done
+             if [ \"\$deployed_image\" != \"\$target_image\" ]; then
+               echo 'FastAPI deployment did not receive the requested image.'
+               kubectl get deployment,pods,svc,endpoints -n fastapi -o wide || true
+               exit 1
+             fi
+             if ! kubectl rollout status deployment/ev-ai-inference-api -n fastapi --timeout=180s; then
+               kubectl get deployment,pods,svc,endpoints -n fastapi -o wide || true
+               kubectl logs deployment/ev-ai-inference-api -n fastapi --tail=100 || true
+               exit 1
+             fi
+             kubectl get deployment,pods,svc,endpoints -n fastapi -o wide"
+
+      - name: Smoke test FastAPI sample path
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          SMOKE_SCRIPT_B64="$(base64 -w0 <<'PY'
+          import json
+          import urllib.request
+          from datetime import datetime, timezone
+          from uuid import uuid4
+
+          payload = {
+              "schema_version": 1,
+              "layout_id": "generic_ev_concept_96_v1",
+              "session_id": str(uuid4()),
+              "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "sequence": 1,
+              "temperature_decic": [300] * 96,
+              "voltage_mv": [3600] * 96,
+              "connector_temperature_decic": [300, 300, 300],
+              "ambient_temperature_c": 25.0,
+              "pack_current_a": 20.0,
+          }
+          request = urllib.request.Request(
+              "http://127.0.0.1:8000/api/v1/twins/vehicles/smoke-test/samples",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              result = json.load(response)
+          if result["final_risk_level"] != 0 or result.get("anomaly_id") is not None:
+              raise RuntimeError(f"unexpected smoke response: {result}")
+          print("FastAPI sample-path smoke test passed")
+          PY
+          )"
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "set -eu
+             export KUBECONFIG=~/.kube/config
+             pod=\$(kubectl get pod -n fastapi -l app=ev-ai-inference-api -o jsonpath='{.items[0].metadata.name}')
+             kubectl exec -n fastapi \$pod -- sh -c \"printf '%s' '$SMOKE_SCRIPT_B64' | base64 -d | python -\""
+
+      - name: Smoke test FastAPI service from backend namespace
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          SMOKE_SCRIPT_B64="$(base64 -w0 <<'PY'
+          import json
+          import urllib.request
+          from datetime import datetime, timezone
+          from uuid import uuid4
+
+          payload = {
+              "schema_version": 1,
+              "layout_id": "generic_ev_concept_96_v1",
+              "session_id": str(uuid4()),
+              "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "sequence": 1,
+              "temperature_decic": [300] * 96,
+              "voltage_mv": [3600] * 96,
+              "connector_temperature_decic": [300, 300, 300],
+          }
+          request = urllib.request.Request(
+              "http://ev-ai-inference-api.fastapi.svc.cluster.local/api/v1/twins/vehicles/backend-smoke-test/samples",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  result = json.load(response)
+          except Exception as exc:
+              raise RuntimeError(f"backend-namespace FastAPI call failed: {exc}") from exc
+          if result["final_risk_level"] != 0 or result.get("anomaly_id") is not None:
+              raise RuntimeError(f"unexpected smoke response: {result}")
+          print("Backend namespace FastAPI service smoke test passed")
+          PY
+          )"
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "set -eu
+             export KUBECONFIG=~/.kube/config
+             kubectl run fastapi-service-smoke -n backend --rm --attach --restart=Never \
+               --image=python:3.11-alpine --command -- sh -c \"printf '%s' '$SMOKE_SCRIPT_B64' | base64 -d | python -\""

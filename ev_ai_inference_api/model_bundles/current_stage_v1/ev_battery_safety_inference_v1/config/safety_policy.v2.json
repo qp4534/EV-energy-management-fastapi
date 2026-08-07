@@ -1,0 +1,47 @@
+{
+  "policy_version": "bms-hybrid-v2-safety-fusion",
+  "status": "project_prototype_not_oem_calibrated",
+  "sampling_interval_seconds": 1.0,
+  "required_ml_signals": [
+    "voltage_v",
+    "temp_mean_c",
+    "temp_max_c",
+    "temp_delta_c",
+    "temp_saturation_fraction",
+    "temp_saturation_all"
+  ],
+  "optional_bms_signals": [
+    "raw_temp_max_c",
+    "raw_temp_mean_c",
+    "ambient_temp_c",
+    "pack_current_a",
+    "cell_voltages_v",
+    "charging_gun_temperature_c"
+  ],
+  "physical_thresholds": {
+    "cell_temp_max_c": {"caution": 50.0, "warning": 60.0, "emergency_candidate": 80.0},
+    "cell_temp_over_ambient_c": {"caution": 15.0, "warning": 25.0, "emergency_candidate": 40.0},
+    "temperature_rise_rate_30s_c_per_s": {"caution": 0.2, "warning": 0.5, "emergency_candidate": 1.0},
+    "min_cell_voltage_v": {"caution": 2.4, "warning": 2.0, "emergency_candidate": 1.5},
+    "max_cell_voltage_v": {"caution": 4.35, "warning": 4.4, "emergency_candidate": 4.5},
+    "cell_voltage_spread_v": {"caution": 0.15, "warning": 0.3, "emergency_candidate": 0.5}
+  },
+  "fusion": {
+    "ml_stage_max_without_independent_physical_evidence": "warning",
+    "hard_emergency_requires": [
+      "thermal emergency candidate plus a corroborator (mean temperature >= warning, rapid rise, or large cell-over-ambient delta)",
+      "or simultaneous thermal warning and electrical warning"
+    ],
+    "temperature_only_emergency_forbidden": true,
+    "charging_gun_temperature_is_not_cell_temperature": true
+  },
+  "temporal": {
+    "caution_consecutive_seconds": 10,
+    "warning_consecutive_seconds": 3,
+    "ml_emergency_pattern_consecutive_seconds": 2,
+    "alert_hold_seconds": 10,
+    "recovery_consecutive_seconds": 5,
+    "hard_physical_emergency_immediate": true
+  },
+  "disclaimer": "All values are configurable prototype policy defaults. They are not OEM limits, safety certification criteria, or universal thermal-runaway thresholds."
+}

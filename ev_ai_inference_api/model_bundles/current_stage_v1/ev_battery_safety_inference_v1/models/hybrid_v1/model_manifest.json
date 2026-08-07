@@ -1,0 +1,111 @@
+{
+  "package_version": "current-best-bms-hybrid-v1",
+  "status": "project_research_prototype_not_vehicle_safety_certified",
+  "created_date": "2026-07-24",
+  "objective": "현재 및 과거 BMS형 센서 흐름으로 열폭주 현재 상태를 정상/주의/경고/긴급 4단계로 분류",
+  "not_objective": "향후 180초 내 열폭주 진입 예측은 별도 모델의 책임",
+  "sampling_interval_seconds": 1,
+  "inference_interval_seconds": 1,
+  "routing": [
+    {
+      "history_seconds": "0-29",
+      "model": null,
+      "policy": "센서 품질 검사와 독립 물리 안전 규칙만 사용"
+    },
+    {
+      "history_seconds": "30-119",
+      "model": "models/stage_30s.joblib",
+      "policy": "30초 포화인지 모델"
+    },
+    {
+      "history_seconds": "120+",
+      "model": "models/stage_120s.joblib",
+      "policy": "60/120초 추세를 포함한 규제형 다중 시간축 모델"
+    }
+  ],
+  "models": {
+    "stage_30s": {
+      "file": "models/stage_30s.joblib",
+      "sha256": "9b906c786a0f5f3198dc4a081ad7352c28edd2059626018832e68b41fc3acf8e",
+      "pipeline_version": "stage5b-bms-saturation-v1",
+      "feature_count": 120,
+      "windows_seconds": [5, 15, 30]
+    },
+    "stage_120s": {
+      "file": "models/stage_120s.joblib",
+      "sha256": "7aaab0bf6023839e3659e36bb6dfb4ac73908c568ae5c010e4342513aac2d7a2",
+      "pipeline_version": "stage5d-bms-multiscale-120s-v1",
+      "feature_count": 192,
+      "windows_seconds": [5, 15, 30, 60, 120]
+    }
+  },
+  "required_causal_signals": [
+    "평균 셀 전압 또는 신뢰 가능한 대표 셀 전압",
+    "평균 셀 온도",
+    "최대 셀 온도",
+    "강건한 셀 온도 편차(p95-p05 권장)",
+    "150도 상한에 도달한 온도 센서 비율",
+    "전체 유효 온도 센서의 상한 포화 여부"
+  ],
+  "input_contract": {
+    "voltage_v": [0.0, 6.0],
+    "temperature_c": [-40.0, 150.0],
+    "temperature_saturation_adapter_trusted": true,
+    "invalid_or_missing_policy": "모델 추론 금지, 상태 unknown, 연속 이력 초기화",
+    "metadata_not_used_as_features": [
+      "experiment_id",
+      "cell_shape",
+      "initial_soc_pct",
+      "abuse_method",
+      "service_stage"
+    ]
+  },
+  "runtime": {
+    "python_environment": "tf_env",
+    "scikit_learn_version_used_for_package_verification": "1.9.0",
+    "serialization": "joblib"
+  },
+  "probability_calibration": {
+    "file": "probability_calibration.json",
+    "method": "temperature_scaling",
+    "stage_30s_temperature": 1.1318957284610451,
+    "stage_120s_temperature": 1.130000127797602,
+    "fit_source": "experiment-grouped training OOF probabilities only",
+    "application": "softmax(log(clip(raw_probability, 1e-12, 1)) / temperature)",
+    "meaning": "현재 4단계 클래스 확률이며 향후 화재 발생확률이 아님"
+  },
+  "selection": {
+    "validation_selected_model": "stage_120s regularized categorical HGB",
+    "rejected_families": [
+      "긴급 확률 임계값 미세조정",
+      "30초 계층형 경고/긴급 분류",
+      "포화 모델 확률 앙상블",
+      "OOF hard-example 재가중",
+      "30초/120초 확률 블렌드",
+      "120초 ordinal 누적확률 모델",
+      "노이즈 증강 가중치 0.5 및 0.2",
+      "별도 시간 안정화 정책 승격"
+    ]
+  },
+  "safety_fusion": {
+    "policy_file": "safety_fusion_policy.json",
+    "ml_emergency_alone": "최종 긴급 경보 근거로 사용하지 않음",
+    "hard_physical_emergency": "독립 온도 또는 열-전기 교차근거가 있으면 즉시 긴급",
+    "normality_model": "정상 BMS 분포 이탈은 최대 경고까지만 기여",
+    "reason": "실험실 단계 라벨과 실제 차량 화재 위험을 동일한 것으로 과장하지 않기 위함"
+  },
+  "external_domain_audit": {
+    "source": "Sandia Cell Abuse Testing Data",
+    "training_rows_used": 0,
+    "positive_proxy_experiments": 9,
+    "ml_warning_or_higher_detected": 5,
+    "ml_emergency_detected": 0,
+    "physical_proxy_detected": 9,
+    "decision": "4단계 학습에는 병합하지 않고 외부 행동 감사로만 사용",
+    "audit_file": "../../../external_data/sandia/sandia_abuse_external_model_evaluation.json"
+  },
+  "verification": {
+    "command": "python verify_package.py",
+    "expected": "2 model hashes, load checks, and calibration contract PASS"
+  }
+}

@@ -1,0 +1,119 @@
+name: ev-ai-inference
+
+x-app-image: &app-image
+  build:
+    context: .
+  image: ev-ai-inference-api:local
+
+x-infra-environment: &infra-environment
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ev_app}:${POSTGRES_PASSWORD:-ev_app}@postgres:5432/${POSTGRES_DB:-ev_ai}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ev_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-ev_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ev_app}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  migrate:
+    <<: *app-image
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *infra-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app-image
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      <<: *infra-environment
+      MODEL_BUNDLE_DIR: /app/model_bundles/current_stage_v1/ev_battery_safety_inference_v1
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-900}
+      MAX_SESSIONS: ${MAX_SESSIONS:-1000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      TWIN_INFRA_REQUIRED: ${TWIN_INFRA_REQUIRED:-true}
+      ANOMALY_PERSISTENCE_ENABLED: ${ANOMALY_PERSISTENCE_ENABLED:-true}
+      REPORT_JOBS_ENABLED: ${REPORT_JOBS_ENABLED:-true}
+      EMBEDDED_AI_ENABLED: ${EMBEDDED_AI_ENABLED:-true}
+      REPORT_WORKER_ENABLED: ${REPORT_WORKER_ENABLED:-true}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-}
+      INFERENCE_BASE_URL: ${INFERENCE_BASE_URL:-http://127.0.0.1:8000}
+      THERMAL_INFERENCE_URL: ${THERMAL_INFERENCE_URL:-http://host.docker.internal:8010}
+      THERMAL_INFERENCE_TOKEN: ${THERMAL_INFERENCE_TOKEN:-local-twin}
+      THERMAL_INFERENCE_TIMEOUT_SECONDS: ${THERMAL_INFERENCE_TIMEOUT_SECONDS:-0.8}
+      THERMAL_DATA_DIR: /app/runtime/thermal
+    volumes:
+      - ./runtime/thermal:/app/runtime/thermal
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    <<: *app-image
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.twin_persistence"]
+    environment:
+      <<: *infra-environment
+      TWIN_CONSUMER_GROUP: ${TWIN_CONSUMER_GROUP:-twin-persistence}
+      TWIN_CONSUMER_NAME: ${TWIN_CONSUMER_NAME:-worker-1}
+      THERMAL_DATA_DIR: /app/runtime/thermal
+    volumes:
+      - ./runtime/thermal:/app/runtime/thermal
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; import sys, time; p = Path('/tmp/twin-worker-heartbeat'); sys.exit(0 if p.is_file() and time.time() - p.stat().st_mtime < 30 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres-data:
+  redis-data:

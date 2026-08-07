@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/app/runtime/huggingface \
+    EMBEDDED_AI_ENABLED=true \
+    REPORT_WORKER_ENABLED=true
+
+WORKDIR /app
+
+RUN addgroup --system app && adduser --system --ingroup app app
+
+COPY requirements.txt requirements-ai.txt ./
+RUN pip install --no-cache-dir --requirement requirements-ai.txt
+
+COPY --chown=app:app . .
+
+USER app
+
+# The chatbot API starts the report worker in its FastAPI lifespan.
+EXPOSE 8001
+CMD ["uvicorn", "app.chatbot.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

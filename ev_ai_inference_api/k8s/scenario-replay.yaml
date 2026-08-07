@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ev-scenario-replay
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ev-scenario-replay}}
+  template:
+    metadata: {labels: {app: ev-scenario-replay}}
+    spec:
+      containers:
+        - name: replay
+          image: REPLACE_WITH_IMAGE_URI
+          command: ["python", "-m", "app.scenario_replay"]
+          args:
+            - --s3-bucket
+            - ev-platform-thermal-data
+            - --s3-prefix
+            - digital-twin/scenarios
+            - --speed
+            - "1"
+          env:
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: fastapi-secret, key: DATABASE_URL}
+            - name: SCENARIO_S3_BUCKET
+              value: "ev-platform-thermal-data"
+            - name: SCENARIO_S3_PREFIX
+              value: "digital-twin/scenarios"
+          resources:
+            requests: {cpu: "100m", memory: 256Mi}
+            limits: {cpu: "500m", memory: 512Mi}
+          # The pod identity needs s3:GetObject on
+          # arn:aws:s3:::ev-platform-thermal-data/digital-twin/scenarios/*
+          # (IRSA role or access-key secret; not configured in this file).

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ev-ai-inference-api
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # The single-node cluster cannot schedule two 2 GiB FastAPI pods at once.
+      maxUnavailable: 1
+      maxSurge: 0
+  selector: {matchLabels: {app: ev-ai-inference-api}}
+  template:
+    metadata: {labels: {app: ev-ai-inference-api}}
+    spec:
+      containers:
+        - name: api
+          image: REPLACE_WITH_IMAGE_URI
+          ports: [{containerPort: 8000}]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: fastapi-secret, key: DATABASE_URL}
+            - {name: REDIS_URL, value: "redis://redis:6379/0"}
+            - {name: MODEL_BUNDLE_DIR, value: /app/model_bundles/current_stage_v1/ev_battery_safety_inference_v1}
+            - {name: ANOMALY_PERSISTENCE_ENABLED, value: "true"}
+            - {name: TWIN_INFRA_REQUIRED, value: "false"}
+            - {name: EMBEDDED_AI_ENABLED, value: "true"}
+            - {name: REPORT_JOBS_ENABLED, value: "true"}
+            - {name: REPORT_WORKER_ENABLED, value: "true"}
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef: {name: fastapi-secret, key: DEEPSEEK_API_KEY, optional: true}
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "2", memory: 4Gi}
+          livenessProbe: {httpGet: {path: /healthz, port: 8000}, initialDelaySeconds: 10, periodSeconds: 10}
+          readinessProbe: {httpGet: {path: /readyz, port: 8000}, initialDelaySeconds: 15, periodSeconds: 10}
