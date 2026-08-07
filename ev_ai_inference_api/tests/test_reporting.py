@@ -250,8 +250,61 @@ async def test_monthly_report_uses_deterministic_aggregates_when_llm_is_unavaila
     metrics_by_label = {item["label"]: item["value"] for item in metrics}
     assert metrics_by_label["전체 차량"] == 140
     assert metrics_by_label["충전 세션"] == 4
+    assert metrics_by_label["총 충전 시간"] == 3.1
+    duration_metric = next(item for item in metrics if item["label"] == "총 충전 시간")
+    assert duration_metric["unit"] == "시간"
     assert report.period.from_date == date(2026, 7, 1)
     assert report.period.to_date == date(2026, 7, 31)
+
+
+@pytest.mark.asyncio
+async def test_monthly_report_sends_charge_duration_to_llm_in_hours() -> None:
+    class CapturingGenerator:
+        user_prompt = ""
+
+        async def generate(
+            self, system_prompt, user_prompt, *, purpose, json_mode=False
+        ):
+            self.user_prompt = user_prompt
+            return (
+                '{"summary":"월간 요약","interpretation":"월간 해석",'
+                '"recommendedActions":[]}'
+            )
+
+    facts = {
+        "periodStart": date(2026, 7, 1),
+        "periodEndExclusive": date(2026, 8, 1),
+        "fleet": {"vehicle_count": 140},
+        "chargingSessions": {
+            "session_count": 800,
+            "completed_session_count": 670,
+            "total_duration_minutes": 174764.8,
+            "average_soc_change": 49.0,
+        },
+        "anomalies": [],
+        "sensorSummary": {},
+    }
+    generator = CapturingGenerator()
+    service = ReportGenerationService(
+        FakeReportData(monthly=facts),
+        FakeRag([evidence()]),
+        generator,
+        now=lambda: NOW,
+    )
+
+    _, report = await service.generate(job(ReportType.MONTHLY))
+    payload = report.model_dump(mode="json", by_alias=True)
+    metric_section = next(
+        section for section in payload["sections"] if section["title"] == "주요 지표"
+    )
+    duration_metric = next(
+        item for item in metric_section["items"] if item["label"] == "총 충전 시간"
+    )
+
+    assert duration_metric["value"] == 2912.7
+    assert duration_metric["unit"] == "시간"
+    assert '"total_duration_hours": 2912.7' in generator.user_prompt
+    assert "total_duration_minutes" not in generator.user_prompt
 
 
 @pytest.mark.asyncio

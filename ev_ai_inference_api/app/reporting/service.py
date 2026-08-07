@@ -423,6 +423,13 @@ class ReportGenerationService:
         fleet = facts.get("fleet") or {}
         anomaly_count = sum(int(row.get("count") or 0) for row in anomaly_rows)
         risk = _highest_risk([row.get("risk_level") for row in anomaly_rows])
+        total_duration_hours = round(
+            float(sessions.get("total_duration_minutes") or 0) / 60.0,
+            1,
+        )
+        report_sessions = dict(sessions)
+        report_sessions.pop("total_duration_minutes", None)
+        report_sessions["total_duration_hours"] = total_duration_hours
 
         metrics = [
             _metric("전체 차량", int(fleet.get("vehicle_count") or 0), "대"),
@@ -434,8 +441,8 @@ class ReportGenerationService:
             ),
             _metric(
                 "총 충전 시간",
-                round(float(sessions.get("total_duration_minutes") or 0), 1),
-                "분",
+                total_duration_hours,
+                "시간",
             ),
             _metric("이상 발생", anomaly_count, "건"),
         ]
@@ -475,7 +482,7 @@ class ReportGenerationService:
             "fleet": fleet,
             "periodStart": start,
             "periodEndExclusive": end_exclusive,
-            "chargingSessions": sessions,
+            "chargingSessions": report_sessions,
             "anomalies": anomaly_rows,
             "sensorSummary": sensor,
         }
