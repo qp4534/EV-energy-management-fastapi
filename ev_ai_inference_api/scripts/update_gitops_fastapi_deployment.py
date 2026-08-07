@@ -30,6 +30,14 @@ AI_RESOURCES = """\
               memory: 4Gi
 """
 
+SINGLE_NODE_STRATEGY = """\
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+"""
+
 
 def update_manifest(content: str, image: str) -> str:
     content, image_count = re.subn(
@@ -40,6 +48,21 @@ def update_manifest(content: str, image: str) -> str:
     )
     if image_count != 1:
         raise ValueError("FastAPI image line was not found exactly once")
+
+    strategy_pattern = re.compile(
+        r"(?m)^  strategy:\n(?: {4,}.*\n)+(?=  selector:)"
+    )
+    if strategy_pattern.search(content):
+        content = strategy_pattern.sub(SINGLE_NODE_STRATEGY, content, count=1)
+    else:
+        selector_marker = "  selector:"
+        if content.count(selector_marker) != 1:
+            raise ValueError("FastAPI deployment selector was not found exactly once")
+        content = content.replace(
+            selector_marker,
+            SINGLE_NODE_STRATEGY + selector_marker,
+            1,
+        )
 
     if "- name: EMBEDDED_AI_ENABLED" not in content:
         marker = "          resources:\n"

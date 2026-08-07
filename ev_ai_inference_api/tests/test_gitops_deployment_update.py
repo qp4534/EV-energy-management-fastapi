@@ -7,6 +7,15 @@ BASE_MANIFEST = """\
 apiVersion: apps/v1
 kind: Deployment
 spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ev-ai-inference-api
   template:
     spec:
       containers:
@@ -40,6 +49,9 @@ def test_gitops_updater_adds_combined_ai_runtime_and_is_idempotent() -> None:
     assert "memory: 2Gi" in updated
     assert 'cpu: "2"' in updated
     assert "memory: 4Gi" in updated
+    assert "maxUnavailable: 1" in updated
+    assert "maxSurge: 0" in updated
+    assert "maxUnavailable: 0" not in updated
 
 
 def test_migration_job_uses_new_image_and_database_secret() -> None:
@@ -52,3 +64,12 @@ def test_migration_job_uses_new_image_and_database_secret() -> None:
     assert "key: DATABASE_URL" in manifest
     assert "migration-job.yaml" in workflow
     assert "kubectl wait --for=condition=complete" in workflow
+
+
+def test_runtime_image_uses_a_writable_huggingface_cache() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "HOME=/app" in dockerfile
+    assert "HF_HOME=/app/.cache/huggingface" in dockerfile
+    assert "mkdir -p /app/.cache/huggingface" in dockerfile
+    assert "chown -R app:app /app/.cache" in dockerfile

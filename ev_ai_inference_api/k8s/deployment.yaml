@@ -4,6 +4,12 @@ metadata:
   name: ev-ai-inference-api
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # The single-node cluster cannot schedule two 2 GiB FastAPI pods at once.
+      maxUnavailable: 1
+      maxSurge: 0
   selector: {matchLabels: {app: ev-ai-inference-api}}
   template:
     metadata: {labels: {app: ev-ai-inference-api}}

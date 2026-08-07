@@ -3,6 +3,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HOME=/app \
+    HF_HOME=/app/.cache/huggingface \
     MODEL_BUNDLE_DIR=/app/model_bundles/current_stage_v1/ev_battery_safety_inference_v1 \
     REPORT_JOBS_ENABLED=true \
     EMBEDDED_AI_ENABLED=true \
@@ -10,7 +12,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system app && adduser --system --ingroup app app
+RUN addgroup --system app \
+    && adduser --system --ingroup app app \
+    && mkdir -p /app/.cache/huggingface \
+    && chown -R app:app /app/.cache
 
 COPY requirements.txt requirements-ai.txt ./
 RUN pip install --no-cache-dir --requirement requirements-ai.txt
