@@ -355,3 +355,150 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
 
     doc.build(S)
     return buf.getvalue()
+
+
+def build_pdf_from_view(*, buyer_name: str, buyer_role: str = "", buyer_location: str = "",
+                        price_total_manwon, unit_price_won, negotiation_range: str,
+                        price_grade_label: str, price_note: str = "",
+                        grade: str, remaining_cycle, new_cycle,
+                        health_score_pct, health_metrics: list[dict],
+                        diagnosis_note: str = "", reasons: list[str] | None = None,
+                        cautions: list[str] | None = None,
+                        seller: str = "배터리 진단 AI 시스템",
+                        doc_no: str | None = None) -> bytes:
+    """관리자 웹(BatteryDiagnosis.jsx "배터리 매도 제안서" 탭)에 이미 표시된 값을 그대로
+    받아 PDF로 렌더링한다.
+
+    build_pdf()와 달리 원본 센서값으로 Agent1~3을 다시 돌리지 않는다 - 화면에 보이는
+    숫자(BATTERY_PASSPORT/BATTERY_PROPOSALS/BATTERY_DIAGNOSIS_METRICS에서 이미 계산되어
+    저장된 값)를 그대로 문서화하는 용도라서, 화면과 PDF 숫자가 어긋날 일이 없다.
+    health_metrics는 [{"label": "수명 여유", "score": "50 / 100"}, ...] 형태(이미
+    포맷된 문자열)를 그대로 받는다.
+    """
+    _register_fonts()
+    st = _styles()
+    today = date.today()
+    doc_no = doc_no or f"BAT-{today:%Y%m%d}-{abs(hash(buyer_name)) % 10000:04d}"
+    reasons = reasons or []
+    cautions = cautions or []
+
+    buf = io.BytesIO()
+    PW, PH = A4
+    ML, MR = 18 * mm, 18 * mm
+    HEADER_H = 34 * mm
+
+    def page(canv, _doc):
+        canv.saveState()
+        canv.setFillColor(NAVY)
+        canv.rect(0, PH - HEADER_H, PW, HEADER_H, stroke=0, fill=1)
+        canv.setFillColor(ACCENT)
+        canv.rect(0, PH - HEADER_H, PW, 2.2 * mm, stroke=0, fill=1)
+
+        canv.setFillColor(colors.white)
+        canv.setFont(FONT_B, 17)
+        canv.drawString(ML, PH - 16 * mm, "사용후 배터리 매도 제안서")
+        canv.setFont(FONT_R, 8.6)
+        canv.setFillColor(colors.HexColor("#B9CBE0"))
+        canv.drawString(ML, PH - 22.5 * mm, "Second-Life EV Battery Sales Proposal")
+        canv.setFont(FONT_R, 8.2)
+        canv.drawRightString(PW - MR, PH - 14 * mm, f"문서번호  {doc_no}")
+        canv.drawRightString(PW - MR, PH - 19 * mm, f"작성일자  {today:%Y-%m-%d}")
+        canv.drawRightString(PW - MR, PH - 24 * mm, f"작 성 자  {seller}")
+
+        canv.setStrokeColor(GRAY_LINE)
+        canv.setLineWidth(0.5)
+        canv.line(ML, 14 * mm, PW - MR, 14 * mm)
+        canv.setFont(FONT_R, 7.6)
+        canv.setFillColor(GRAY_TXT)
+        canv.drawString(ML, 9.5 * mm, "사용후 배터리 매도 제안서 · 대외비(Confidential)")
+        canv.drawRightString(PW - MR, 9.5 * mm, f"- {canv.getPageNumber()} -")
+        canv.restoreState()
+
+    doc = BaseDocTemplate(buf, pagesize=A4,
+                          leftMargin=ML, rightMargin=MR,
+                          topMargin=HEADER_H + 8 * mm, bottomMargin=20 * mm,
+                          title="사용후 배터리 매도 제안서", author=seller)
+    frame = Frame(ML, 20 * mm, PW - ML - MR, PH - HEADER_H - 28 * mm, id="f")
+    doc.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=page)])
+
+    CW = PW - ML - MR
+    S = []
+
+    S.append(_kv_table([
+        ["수 신", f"<b>{buyer_name}</b>" + (f"  ({buyer_role})" if buyer_role else "")],
+        ["소재지", buyer_location or "—"],
+    ], [28 * mm, CW - 28 * mm], st))
+    S.append(Spacer(1, 9 * mm))
+
+    S.append(Paragraph("1. 제안 가격", st["sec"]))
+    price_tbl = Table([[
+        Paragraph("제안 총액", ParagraphStyle("pl", fontName=FONT_R, fontSize=9,
+                                          textColor=colors.HexColor("#B9CBE0"))),
+        Paragraph(f"<b>{price_total_manwon:,.0f}만원</b>",
+                  ParagraphStyle("pv", fontName=FONT_B, fontSize=20, leading=25,
+                                 textColor=colors.white, alignment=TA_RIGHT)),
+    ]], colWidths=[CW * 0.45, CW * 0.55])
+    price_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 11),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 11),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    S.append(price_tbl)
+    S.append(Spacer(1, 2 * mm))
+    S.append(_kv_table([
+        ["적용 단가", f"{unit_price_won:,.0f} 원 / kWh　({price_grade_label})"],
+        ["협의 범위", negotiation_range],
+    ], [28 * mm, CW - 28 * mm], st))
+    if price_note:
+        S.append(Spacer(1, 3 * mm))
+        S.append(Paragraph(f"※ {price_note}", st["small"]))
+    S.append(Spacer(1, 8 * mm))
+
+    S.append(Paragraph("2. 배터리 상태 진단 (AI 진단 결과)", st["sec"]))
+    S.append(_kv_table([
+        ["판별 등급", f"<b>{grade}</b>"],
+        ["예측 잔여수명", f"<b>{remaining_cycle:,.0f}</b> 사이클　(신품 기준 {new_cycle:,.0f} 사이클)"],
+        ["추정 건강도", f"<b>{health_score_pct:.1f}%</b>"],
+    ], [32 * mm, CW - 32 * mm], st))
+    S.append(Spacer(1, 4 * mm))
+
+    if health_metrics:
+        S.append(_kv_table(
+            [[m.get("label", ""), m.get("score", "")] for m in health_metrics],
+            [CW * 0.5, CW * 0.5], st, header=["건전성 세부 지표", "점수"]))
+        S.append(Spacer(1, 3 * mm))
+    if diagnosis_note:
+        S.append(Paragraph(diagnosis_note, st["small"]))
+    S.append(Spacer(1, 8 * mm))
+
+    if reasons:
+        S.append(Paragraph("3. 귀사에 적합한 이유", st["sec"]))
+        for r in reasons:
+            S.append(Paragraph(r, st["body"]))
+        S.append(Spacer(1, 8 * mm))
+
+    if cautions:
+        S.append(Paragraph("4. 유의사항", st["sec"]))
+        for c in cautions:
+            S.append(Paragraph(f"·　{c}", st["small"]))
+            S.append(Spacer(1, 1.5 * mm))
+
+    S.append(Spacer(1, 10 * mm))
+    sign = Table([["제 안 자", seller, "( 인 )"]],
+                 colWidths=[26 * mm, CW - 26 * mm - 26 * mm, 26 * mm])
+    sign.setStyle(TableStyle([
+        ("FONT", (0, 0), (0, 0), FONT_B, 9.5),
+        ("FONT", (1, 0), (-1, 0), FONT_R, 9.5),
+        ("TEXTCOLOR", (0, 0), (0, 0), NAVY),
+        ("ALIGN", (2, 0), (2, 0), "RIGHT"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.7, NAVY),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    S.append(sign)
+
+    doc.build(S)
+    return buf.getvalue()

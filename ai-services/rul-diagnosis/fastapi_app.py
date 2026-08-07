@@ -413,6 +413,54 @@ def diagnose_erd(req: ErdDiagnoseRequest):
     }
 
 
+class HealthMetricView(BaseModel):
+    label: str
+    score: str
+
+
+class PdfFromViewRequest(BaseModel):
+    """관리자 웹(BatteryDiagnosis.jsx)이 화면에 이미 표시한 값 그대로. Agent1~3을
+    다시 돌리지 않으므로 화면 숫자와 PDF 숫자가 어긋날 일이 없다."""
+    buyer_name: str = "매입 희망 기업"
+    buyer_role: str = ""
+    buyer_location: str = ""
+    price_total_manwon: float
+    unit_price_won: float
+    negotiation_range: str
+    price_grade_label: str
+    price_note: str = ""
+    grade: str
+    remaining_cycle: float
+    new_cycle: float
+    health_score_pct: float
+    health_metrics: list[HealthMetricView] = []
+    diagnosis_note: str = ""
+    reasons: list[str] = []
+    cautions: list[str] = []
+
+
+@app.post("/report/pdf/from-view")
+def report_pdf_from_view(req: PdfFromViewRequest):
+    """이미 계산되어 화면에 뜬 진단/제안 값을 그대로 PDF로 렌더링만 한다."""
+    pdf_bytes = PDF.build_pdf_from_view(
+        buyer_name=req.buyer_name, buyer_role=req.buyer_role, buyer_location=req.buyer_location,
+        price_total_manwon=req.price_total_manwon, unit_price_won=req.unit_price_won,
+        negotiation_range=req.negotiation_range, price_grade_label=req.price_grade_label,
+        price_note=req.price_note, grade=req.grade, remaining_cycle=req.remaining_cycle,
+        new_cycle=req.new_cycle, health_score_pct=req.health_score_pct,
+        health_metrics=[m.model_dump() for m in req.health_metrics],
+        diagnosis_note=req.diagnosis_note, reasons=req.reasons, cautions=req.cautions,
+    )
+    from urllib.parse import quote
+    fname = quote(f"매도제안서_{req.buyer_name.split()[0]}.pdf")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=battery_proposal.pdf; "
+                                        f"filename*=UTF-8''{fname}"},
+    )
+
+
 # ------------------------------------------------------------------
 # 엑셀 일괄 업로드 — 관리자가 여러 배터리 행을 한 번에 올려 파이프라인을 돌린다.
 #   Claude 호출(리포트 작성)은 하지 않는다 — 수백 행을 한 번에 처리할 수 있으므로
