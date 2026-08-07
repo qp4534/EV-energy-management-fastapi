@@ -8,10 +8,12 @@ import json
 import math
 import os
 from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from pydantic import TypeAdapter
 from redis.asyncio import Redis
 from sqlalchemy import text
@@ -43,6 +45,178 @@ class VehicleScenarioAssignment:
     offset_seconds: int
 
 
+@dataclass
+class CompactScenario:
+    """Scenario frames stored as compact numpy arrays instead of Pydantic objects."""
+
+    scenario_id: str
+    frame_count: int
+    temperature_decic: np.ndarray  # (N, 96) int16
+    voltage_mv: np.ndarray  # (N, 96) int16
+    state_level: np.ndarray  # (N, 96) int8
+    connector_temperature_decic: np.ndarray  # (N, 3) int16
+    connector_state_level: np.ndarray  # (N, 3) int8
+    hotspot_cell_index: np.ndarray  # (N,) int16
+    hotspot_connector_index: np.ndarray  # (N,) int8
+    ml_risk_level: np.ndarray  # (N,) int8 (-1 = None)
+    physics_risk_level: np.ndarray  # (N,) int8
+    final_risk_level: np.ndarray  # (N,) int8
+    cell_heat_score: np.ndarray  # (N, 96) float32 (nan = None)
+    image_risk_level: np.ndarray  # (N,) int8 (-1 = None)
+    image_confidence: np.ndarray  # (N,) float32 (nan = None)
+    image_probabilities: np.ndarray  # (N, 4) float32 (nan = None)
+    module_heat_score: np.ndarray  # (N, 12) float32 (nan = None)
+    module_state_level: np.ndarray  # (N, 12) int8 (-1 = None)
+    hotspot_module_index: np.ndarray  # (N,) int16 (-1 = None)
+    image_model_status: list[str] = field(default_factory=list)
+    fusion_source: list[str] = field(default_factory=list)
+    thermal_frame_ref: list[str | None] = field(default_factory=list)
+    thermal_frame_sha256: list[str | None] = field(default_factory=list)
+
+    @classmethod
+    def from_frames(
+        cls,
+        scenario_id: str,
+        frames: list[TwinFrame],
+    ) -> "CompactScenario":
+        count = len(frames)
+        compact = cls.empty(scenario_id, count)
+        for index, frame in enumerate(frames):
+            compact.fill_row(index, frame.model_dump(mode="json"))
+        return compact
+
+    @classmethod
+    def empty(cls, scenario_id: str, frame_count: int) -> "CompactScenario":
+        count = frame_count
+        return cls(
+            scenario_id=scenario_id,
+            frame_count=count,
+            temperature_decic=np.empty((count, 96), dtype=np.int16),
+            voltage_mv=np.empty((count, 96), dtype=np.int16),
+            state_level=np.empty((count, 96), dtype=np.int8),
+            connector_temperature_decic=np.empty((count, 3), dtype=np.int16),
+            connector_state_level=np.empty((count, 3), dtype=np.int8),
+            hotspot_cell_index=np.empty(count, dtype=np.int16),
+            hotspot_connector_index=np.empty(count, dtype=np.int8),
+            ml_risk_level=np.full(count, -1, dtype=np.int8),
+            physics_risk_level=np.empty(count, dtype=np.int8),
+            final_risk_level=np.empty(count, dtype=np.int8),
+            cell_heat_score=np.full((count, 96), np.nan, dtype=np.float32),
+            image_risk_level=np.full(count, -1, dtype=np.int8),
+            image_confidence=np.full(count, np.nan, dtype=np.float32),
+            image_probabilities=np.full((count, 4), np.nan, dtype=np.float32),
+            module_heat_score=np.full((count, 12), np.nan, dtype=np.float32),
+            module_state_level=np.full((count, 12), -1, dtype=np.int8),
+            hotspot_module_index=np.full(count, -1, dtype=np.int16),
+            image_model_status=["unavailable"] * count,
+            fusion_source=["sensor-only"] * count,
+            thermal_frame_ref=[None] * count,
+            thermal_frame_sha256=[None] * count,
+        )
+
+    def fill_row(self, index: int, payload: dict[str, Any]) -> None:
+        self.temperature_decic[index] = payload["temperature_decic"]
+        self.voltage_mv[index] = payload["voltage_mv"]
+        self.state_level[index] = payload["state_level"]
+        self.connector_temperature_decic[index] = payload[
+            "connector_temperature_decic"
+        ]
+        self.connector_state_level[index] = payload["connector_state_level"]
+        self.hotspot_cell_index[index] = payload["hotspot_cell_index"]
+        self.hotspot_connector_index[index] = payload["hotspot_connector_index"]
+        self.ml_risk_level[index] = (
+            -1
+            if payload.get("ml_risk_level") is None
+            else int(payload["ml_risk_level"])
+        )
+        self.physics_risk_level[index] = int(payload["physics_risk_level"])
+        self.final_risk_level[index] = int(payload["final_risk_level"])
+        if payload.get("cell_heat_score") is not None:
+            self.cell_heat_score[index] = payload["cell_heat_score"]
+        self.image_risk_level[index] = (
+            -1
+            if payload.get("image_risk_level") is None
+            else int(payload["image_risk_level"])
+        )
+        if payload.get("image_confidence") is not None:
+            self.image_confidence[index] = float(payload["image_confidence"])
+        if payload.get("image_probabilities") is not None:
+            self.image_probabilities[index] = payload["image_probabilities"]
+        if payload.get("module_heat_score") is not None:
+            self.module_heat_score[index] = payload["module_heat_score"]
+        if payload.get("module_state_level") is not None:
+            self.module_state_level[index] = payload["module_state_level"]
+        self.hotspot_module_index[index] = (
+            -1
+            if payload.get("hotspot_module_index") is None
+            else int(payload["hotspot_module_index"])
+        )
+        self.image_model_status[index] = payload.get(
+            "image_model_status", "unavailable"
+        )
+        self.fusion_source[index] = payload.get("fusion_source", "sensor-only")
+        self.thermal_frame_ref[index] = payload.get("thermal_frame_ref")
+        self.thermal_frame_sha256[index] = payload.get("thermal_frame_sha256")
+
+    def frame_at(
+        self,
+        index: int,
+        *,
+        vehicle_id: str,
+        observed_at: datetime,
+        sequence: int,
+    ) -> TwinFrame:
+        row = index % self.frame_count
+        ml = self.ml_risk_level[row]
+        image_risk = self.image_risk_level[row]
+        hotspot_module = self.hotspot_module_index[row]
+        return TwinFrame(
+            vehicle_id=vehicle_id,
+            observed_at=observed_at,
+            sequence=sequence,
+            temperature_decic=self.temperature_decic[row].tolist(),
+            voltage_mv=self.voltage_mv[row].tolist(),
+            state_level=self.state_level[row].tolist(),
+            connector_temperature_decic=self.connector_temperature_decic[
+                row
+            ].tolist(),
+            connector_state_level=self.connector_state_level[row].tolist(),
+            hotspot_cell_index=int(self.hotspot_cell_index[row]),
+            hotspot_connector_index=int(self.hotspot_connector_index[row]),
+            ml_risk_level=None if ml < 0 else int(ml),
+            physics_risk_level=int(self.physics_risk_level[row]),
+            final_risk_level=int(self.final_risk_level[row]),
+            cell_heat_score=_row_or_none(self.cell_heat_score, row),
+            image_risk_level=None if image_risk < 0 else int(image_risk),
+            image_confidence=_scalar_or_none(self.image_confidence, row),
+            image_probabilities=_row_or_none(self.image_probabilities, row),
+            image_model_status=self.image_model_status[row],
+            module_heat_score=_row_or_none(self.module_heat_score, row),
+            module_state_level=_row_or_none(self.module_state_level, row),
+            hotspot_module_index=(
+                None if hotspot_module < 0 else int(hotspot_module)
+            ),
+            thermal_frame_ref=self.thermal_frame_ref[row],
+            thermal_frame_sha256=self.thermal_frame_sha256[row],
+            fusion_source=self.fusion_source[row],
+        )
+
+
+def _row_or_none(array: np.ndarray, row: int):
+    values = array[row]
+    if np.issubdtype(array.dtype, np.integer):
+        if int(values.min()) == -1 and int(values.max()) == -1:
+            return None
+    elif np.isnan(values).all():
+        return None
+    return values.tolist()
+
+
+def _scalar_or_none(array: np.ndarray, row: int):
+    value = array[row]
+    return None if np.isnan(value) else float(value)
+
+
 def _parse_aware(value: str) -> datetime:
     parsed = _AWARE_DATETIME.validate_python(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
@@ -63,6 +237,123 @@ def load_datasets(scenario_dir: Path) -> dict[str, list[TwinFrame]]:
             datasets[scenario.scenario_id] = load_scenario_frames(frames_path)
     if not datasets:
         raise ValueError(f"no scenario datasets found under {scenario_dir}")
+    return datasets
+
+
+def _gzip_line_count(data: bytes) -> int:
+    with gzip.open(io.BytesIO(data), "rt", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def load_compact_datasets(
+    scenario_dir: Path,
+) -> dict[str, CompactScenario]:
+    """Load scenario datasets as compact numpy arrays (low memory)."""
+
+    datasets: dict[str, CompactScenario] = {}
+    for scenario in SCENARIOS:
+        scenario_path = Path(scenario_dir) / scenario.scenario_id
+        frames_path = scenario_path / "frames.jsonl.gz"
+        if not frames_path.is_file():
+            frames_path = scenario_path / "frames.jsonl"
+        if not frames_path.is_file():
+            continue
+        metadata_path = scenario_path / "metadata.json"
+        frame_count = None
+        if metadata_path.is_file():
+            frame_count = json.loads(
+                metadata_path.read_text(encoding="utf-8")
+            ).get("frame_count")
+        if not frame_count:
+            raise ValueError(
+                f"{scenario.scenario_id} metadata.json has no frame_count"
+            )
+        compact = CompactScenario.empty(scenario.scenario_id, int(frame_count))
+        opener = gzip.open if frames_path.suffix == ".gz" else open
+        with opener(frames_path, "rt", encoding="utf-8") as handle:
+            index = 0
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                compact.fill_row(index, json.loads(stripped))
+                index += 1
+        if index != int(frame_count):
+            raise ValueError(
+                f"{scenario.scenario_id} expected {frame_count} frames, "
+                f"got {index}"
+            )
+        datasets[scenario.scenario_id] = compact
+    if not datasets:
+        raise ValueError(f"no scenario datasets found under {scenario_dir}")
+    return datasets
+
+
+def load_compact_datasets_from_s3(
+    bucket: str,
+    prefix: str,
+    *,
+    region: str = "ap-northeast-2",
+    s3_client: Any | None = None,
+) -> dict[str, CompactScenario]:
+    """Load scenario datasets from S3 as compact numpy arrays (low memory)."""
+
+    if s3_client is None:
+        import boto3
+
+        s3 = boto3.client("s3", region_name=region)
+    else:
+        s3 = s3_client
+    normalized_prefix = prefix.strip("/")
+    manifest_key = f"{normalized_prefix}/manifest.json"
+    try:
+        manifest_response = s3.get_object(Bucket=bucket, Key=manifest_key)
+        manifest = json.loads(
+            manifest_response["Body"].read().decode("utf-8")
+        )
+        entries = manifest.get("scenarios", [])
+    except s3.exceptions.NoSuchKey:
+        entries = [
+            {
+                "scenario_id": scenario.scenario_id,
+                "frames_key": (
+                    f"{normalized_prefix}/{scenario.scenario_id}/"
+                    "frames.jsonl.gz"
+                ),
+                "frame_count": None,
+            }
+            for scenario in SCENARIOS
+        ]
+
+    datasets: dict[str, CompactScenario] = {}
+    for entry in entries:
+        scenario_id = entry.get("scenario_id")
+        if scenario_id not in SCENARIO_BY_ID:
+            continue
+        frames_key = entry.get("frames_key") or (
+            f"{normalized_prefix}/{scenario_id}/frames.jsonl.gz"
+        )
+        try:
+            body = s3.get_object(Bucket=bucket, Key=frames_key)["Body"].read()
+        except s3.exceptions.NoSuchKey:
+            continue
+        frame_count = entry.get("frame_count")
+        if not frame_count:
+            frame_count = _gzip_line_count(body)
+        compact = CompactScenario.empty(scenario_id, int(frame_count))
+        with gzip.open(io.BytesIO(body), "rt", encoding="utf-8") as handle:
+            index = 0
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                compact.fill_row(index, json.loads(stripped))
+                index += 1
+        datasets[scenario_id] = compact
+    if not datasets:
+        raise ValueError(
+            f"no scenario datasets found in s3://{bucket}/{normalized_prefix}"
+        )
     return datasets
 
 
@@ -194,7 +485,7 @@ def load_assignments_from_file(path: Path) -> list[VehicleScenarioAssignment]:
 async def replay_scenarios(
     store: TwinRedisStore,
     assignments: list[VehicleScenarioAssignment],
-    datasets: dict[str, list[TwinFrame]],
+    datasets: dict[str, CompactScenario],
     *,
     start_at: datetime,
     speed: float,
@@ -217,15 +508,11 @@ async def replay_scenarios(
         observed_at = start_at + timedelta(seconds=loop_second)
         for assignment in assignments:
             dataset = datasets[assignment.scenario_id]
-            source = dataset[
-                (loop_second + assignment.offset_seconds) % len(dataset)
-            ]
-            frame = source.model_copy(
-                update={
-                    "vehicle_id": assignment.vehicle_id,
-                    "observed_at": observed_at,
-                    "sequence": loop_second,
-                }
+            frame = dataset.frame_at(
+                loop_second + assignment.offset_seconds,
+                vehicle_id=assignment.vehicle_id,
+                observed_at=observed_at,
+                sequence=loop_second,
             )
             await store.publish_live_only(frame)
         loop_second += 1
@@ -279,13 +566,13 @@ def parse_args() -> argparse.Namespace:
 async def _run_replay(args: argparse.Namespace) -> None:
     settings = Settings.load()
     if args.s3_bucket:
-        datasets = load_datasets_from_s3(
+        datasets = load_compact_datasets_from_s3(
             args.s3_bucket,
             args.s3_prefix,
             region=args.s3_region,
         )
     else:
-        datasets = load_datasets(Path(args.scenario_dir))
+        datasets = load_compact_datasets(Path(args.scenario_dir))
     if args.assignments_file:
         assignments = load_assignments_from_file(Path(args.assignments_file))
     else:

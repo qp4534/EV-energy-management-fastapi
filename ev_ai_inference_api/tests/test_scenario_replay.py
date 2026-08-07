@@ -12,8 +12,8 @@ from app.scenario_generator import (
 )
 from app.scenario_replay import (
     VehicleScenarioAssignment,
+    load_compact_datasets,
     load_assignments_from_file,
-    load_datasets,
     replay_scenarios,
 )
 
@@ -84,9 +84,9 @@ async def test_load_datasets_reads_generated_scenarios(tmp_path) -> None:
         start_at=START,
     )
     write_scenario_dataset(scenario, frames, tmp_path)
-    datasets = load_datasets(tmp_path)
+    datasets = load_compact_datasets(tmp_path)
     assert datasets["normal"]
-    assert len(datasets["normal"]) == 5
+    assert datasets["normal"].frame_count == 5
 
 
 @pytest.mark.asyncio
@@ -98,7 +98,7 @@ async def test_replay_scenarios_publishes_rewritten_frames(tmp_path) -> None:
         start_at=START,
     )
     write_scenario_dataset(scenario, frames, tmp_path)
-    datasets = load_datasets(tmp_path)
+    datasets = load_compact_datasets(tmp_path)
     assignments = [
         VehicleScenarioAssignment(
             vehicle_id="car-11111111-1111-1111-1111-111111111111",
