@@ -252,8 +252,9 @@ class PostgresReportRepository:
                                     AS temperature_c
                             FROM public."TWIN_FRAMES"
                             WHERE car_id = :car_id
-                              AND observed_at >= :detected_at - INTERVAL '24 hours'
-                              AND observed_at <= :detected_at
+                              AND observed_at >=
+                                  CAST(:detected_at AS timestamptz) - INTERVAL '24 hours'
+                              AND observed_at <= CAST(:detected_at AS timestamptz)
                               AND model_input->>'temp_max_c'
                                   ~ '^-?[0-9]+(\\.[0-9]+)?$'
                             GROUP BY date_trunc('hour', observed_at)
