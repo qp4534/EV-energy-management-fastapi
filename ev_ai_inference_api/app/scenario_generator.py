@@ -226,7 +226,7 @@ def build_scenario_sample(
             + 25.0 * math.sin(sequence / 17.0)
         )
 
-    if anomaly_plateau and scenario_id in {
+    if scenario_id in {
         "battery_over_temp",
         "thermal_runaway_risk",
         "battery_overheat_sign",
@@ -235,9 +235,12 @@ def build_scenario_sample(
         "cell_voltage_deviation",
     }:
         for index in range(CELL_COUNT):
-            temperatures[index] += round(
-                2 * math.sin((sequence + index * 7) / 19.0)
+            fluctuation = (
+                (1.5 + 6.0 * intensity)
+                * math.sin((sequence + index * 7) / 19.0)
+                * (0.6 + 0.4 * math.sin((sequence + index * 3) / 37.0))
             )
+            temperatures[index] += round(fluctuation)
     if scenario_id in {
         "connector_local_overheat",
         "connector_temp_rise",
