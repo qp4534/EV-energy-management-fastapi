@@ -43,7 +43,11 @@ jobs:
           chmod 600 ~/.ssh/deploy_key.pem
           FASTAPI_DATABASE_URL_B64="$(printf '%s' "$FASTAPI_DATABASE_URL" | base64 -w0)"
           DEEPSEEK_API_KEY_B64="$(printf '%s' "$DEEPSEEK_API_KEY" | base64 -w0)"
-          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+          ssh -i ~/.ssh/deploy_key.pem \
+            -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=30 \
+            "ubuntu@$EC2_HOST" \
             "export KUBECONFIG=~/.kube/config
              kubectl create namespace fastapi --dry-run=client -o yaml | kubectl apply -f -
              DATABASE_URL=\$(printf '%s' '$FASTAPI_DATABASE_URL_B64' | base64 -d)
@@ -66,12 +70,16 @@ jobs:
             -e "s#REPLACE_WITH_JOB_NAME#$MIGRATION_JOB#g" \
             -e "s#REPLACE_WITH_IMAGE_URI#${{ env.IMAGE }}:${{ github.sha }}#g" \
             ev_ai_inference_api/k8s/migration-job.yaml | base64 -w0)"
-          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+          ssh -i ~/.ssh/deploy_key.pem \
+            -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=30 \
+            "ubuntu@$EC2_HOST" \
             "export KUBECONFIG=~/.kube/config
              kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true
              printf '%s' '$MIGRATION_MANIFEST_B64' | base64 -d | kubectl apply -f -
              if ! kubectl wait --for=condition=complete job/'$MIGRATION_JOB' \
-               -n fastapi --timeout=300s; then
+               -n fastapi --timeout=900s; then
                kubectl logs job/'$MIGRATION_JOB' -n fastapi || true
                exit 1
              fi
