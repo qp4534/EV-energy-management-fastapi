@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -125,6 +126,38 @@ def _voltage_deviation_v(raw_metrics: dict[str, Any]) -> float | None:
     return round((max(numeric) - min(numeric)) / 1_000.0, 3)
 
 
+_VOLTAGE_DEVIATION_TRIGGER = re.compile(
+    r"(?:전압\s*편차|voltage\s*(?:deviation|delta))\s*[:=]?\s*"
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>m?v)\b",
+    re.IGNORECASE,
+)
+
+
+def _trigger_voltage_deviation_v(facts: dict[str, Any]) -> float | None:
+    abnormal_type = str(facts.get("abnormal_type") or "").strip().lower()
+    is_voltage_anomaly = (
+        "전압" in abnormal_type
+        and ("편차" in abnormal_type or "불균형" in abnormal_type)
+    ) or (
+        "voltage" in abnormal_type
+        and ("deviation" in abnormal_type or "imbalance" in abnormal_type)
+    )
+    if not is_voltage_anomaly:
+        return None
+
+    trigger_value = str(facts.get("trigger_value") or "").strip()
+    match = _VOLTAGE_DEVIATION_TRIGGER.search(trigger_value)
+    if match is None:
+        return None
+
+    value = float(match.group("value"))
+    if match.group("unit").lower() == "mv":
+        value /= 1_000.0
+    if not 0.0 <= value <= 5.0:
+        return None
+    return round(value, 3)
+
+
 class ReportGenerationService:
     def __init__(
         self,
@@ -198,7 +231,22 @@ class ReportGenerationService:
             if soh is not None and previous_soh is not None
             else None
         )
-        voltage_deviation = _voltage_deviation_v(raw_metrics)
+        cell_voltage_deviation = _voltage_deviation_v(raw_metrics)
+        trigger_voltage_deviation = _trigger_voltage_deviation_v(facts)
+        voltage_deviation = (
+            cell_voltage_deviation
+            if cell_voltage_deviation is not None
+            else trigger_voltage_deviation
+        )
+        voltage_deviation_caption = (
+            "96개 셀의 최대·최소 전압 차이"
+            if cell_voltage_deviation is not None
+            else (
+                "이상 감지 로그 기준"
+                if trigger_voltage_deviation is not None
+                else "셀별 전압 데이터 없음"
+            )
+        )
         charge_cycles = facts.get("charge_cycles")
         detected_value = (
             detected_at.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S KST")
@@ -243,11 +291,7 @@ class ReportGenerationService:
                 "전압 편차",
                 voltage_deviation if voltage_deviation is not None else "확인 불가",
                 "V" if voltage_deviation is not None else None,
-                caption=(
-                    "96개 셀의 최대·최소 전압 차이"
-                    if voltage_deviation is not None
-                    else "셀별 전압 데이터 없음"
-                ),
+                caption=voltage_deviation_caption,
             ),
             _metric(
                 "누적 충전 사이클",
@@ -350,7 +394,7 @@ class ReportGenerationService:
             missing.append("modelInput")
         if soh_delta is None:
             missing.append("sohHistory")
-        if voltage_deviation is None:
+        if cell_voltage_deviation is None:
             missing.append("cellVoltages")
         if charge_cycles is None:
             missing.append("chargeCycles")

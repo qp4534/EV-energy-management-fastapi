@@ -154,6 +154,68 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
 
 
 @pytest.mark.asyncio
+async def test_anomaly_report_uses_voltage_trigger_when_cell_values_are_missing() -> None:
+    facts = {
+        "detected_at": NOW,
+        "abnormal_type": "셀 전압 불균형",
+        "source_type": "BMS",
+        "trigger_value": "전압편차 0.164V",
+        "risk_level": "경고",
+        "raw_metrics": {},
+    }
+    service = ReportGenerationService(
+        FakeReportData(anomaly=facts),
+        FakeRag(),
+        FakeGenerator(),
+        now=lambda: NOW,
+    )
+
+    _, report = await service.generate(job(ReportType.ANOMALY))
+    payload = report.model_dump(mode="json", by_alias=True)
+    metric_section = next(
+        section for section in payload["sections"] if section["title"] == "이상 지표"
+    )
+    voltage_metric = next(
+        item for item in metric_section["items"] if item["label"] == "전압 편차"
+    )
+
+    assert voltage_metric["value"] == 0.164
+    assert voltage_metric["unit"] == "V"
+    assert voltage_metric["caption"] == "이상 감지 로그 기준"
+    assert "cellVoltages" in payload["missingFields"]
+
+
+@pytest.mark.asyncio
+async def test_anomaly_report_does_not_treat_unrelated_trigger_as_voltage() -> None:
+    facts = {
+        "detected_at": NOW,
+        "abnormal_type": "배터리 과열 징후",
+        "source_type": "THERMAL",
+        "trigger_value": "최고온도 51.3°C",
+        "risk_level": "경고",
+        "raw_metrics": {},
+    }
+    service = ReportGenerationService(
+        FakeReportData(anomaly=facts),
+        FakeRag(),
+        FakeGenerator(),
+        now=lambda: NOW,
+    )
+
+    _, report = await service.generate(job(ReportType.ANOMALY))
+    payload = report.model_dump(mode="json", by_alias=True)
+    metric_section = next(
+        section for section in payload["sections"] if section["title"] == "이상 지표"
+    )
+    voltage_metric = next(
+        item for item in metric_section["items"] if item["label"] == "전압 편차"
+    )
+
+    assert voltage_metric["value"] == "확인 불가"
+    assert voltage_metric["caption"] == "셀별 전압 데이터 없음"
+
+
+@pytest.mark.asyncio
 async def test_monthly_report_uses_deterministic_aggregates_when_llm_is_unavailable() -> None:
     facts = {
         "periodStart": date(2026, 7, 1),
