@@ -138,3 +138,48 @@ jobs:
                exit 1
              fi
              kubectl get deployment,pods,svc,endpoints -n fastapi -o wide"
+
+      - name: Smoke test FastAPI sample path
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          SMOKE_SCRIPT_B64="$(base64 -w0 <<'PY'
+          import json
+          import urllib.request
+          from datetime import datetime, timezone
+          from uuid import uuid4
+
+          payload = {
+              "schema_version": 1,
+              "layout_id": "generic_ev_concept_96_v1",
+              "session_id": str(uuid4()),
+              "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "sequence": 1,
+              "temperature_decic": [300] * 96,
+              "voltage_mv": [3600] * 96,
+              "connector_temperature_decic": [300, 300, 300],
+              "ambient_temperature_c": 25.0,
+              "pack_current_a": 20.0,
+          }
+          request = urllib.request.Request(
+              "http://127.0.0.1:8000/api/v1/twins/vehicles/smoke-test/samples",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              result = json.load(response)
+          if result["final_risk_level"] != 0 or result.get("anomaly_id") is not None:
+              raise RuntimeError(f"unexpected smoke response: {result}")
+          print("FastAPI sample-path smoke test passed")
+          PY
+          )"
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "set -eu
+             export KUBECONFIG=~/.kube/config
+             pod=\$(kubectl get pod -n fastapi -l app=ev-ai-inference-api -o jsonpath='{.items[0].metadata.name}')
+             kubectl exec -n fastapi \$pod -- sh -c \"printf '%s' '$SMOKE_SCRIPT_B64' | base64 -d | python -\""
