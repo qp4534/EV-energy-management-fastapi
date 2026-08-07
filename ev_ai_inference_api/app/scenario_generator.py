@@ -17,6 +17,7 @@ from app.scenario_catalog import (
     SCENARIOS,
     ScenarioDefinition,
 )
+from app.simulator import _clamp_frame_risk
 from app.schemas.twins import (
     CELL_COUNT,
     CONNECTOR_COMPONENT_COUNT,
@@ -272,6 +273,7 @@ async def generate_scenario_frames(
             thermal_frame_sha256=thermal_frame_sha256,
             fusion_source=fused["fusion_source"],
         )
+        frame = _clamp_frame_risk(frame, scenario.risk_level)
         frames.append(frame)
     return frames
 

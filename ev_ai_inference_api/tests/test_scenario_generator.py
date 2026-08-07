@@ -93,22 +93,25 @@ def test_charging_current_fluctuation_changes_pack_current() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_scenario_frames_produces_valid_twin_frames(tmp_path) -> None:
-    scenarios = (
-        SCENARIO_BY_ID["normal"],
-        SCENARIO_BY_ID["connector_local_overheat"],
+@pytest.mark.parametrize(
+    "scenario_id",
+    sorted(SCENARIO_BY_ID),
+)
+async def test_generate_scenario_frames_matches_target_risk(scenario_id: str) -> None:
+    scenario = SCENARIO_BY_ID[scenario_id]
+    frames = await generate_scenario_frames(
+        scenario,
+        frame_count=5,
+        start_at=START,
+        settings=None,
     )
-    for scenario in scenarios:
-        frames = await generate_scenario_frames(
-            scenario,
-            frame_count=20,
-            start_at=START,
-            settings=None,
-        )
-        assert len(frames) == 20
-        assert [frame.sequence for frame in frames] == list(range(20))
-        assert frames[-1].final_risk_level == scenario.risk_level
-        assert frames[-1].vehicle_id == f"scenario-{scenario.scenario_id}"
+    assert len(frames) == 5
+    assert [frame.sequence for frame in frames] == list(range(5))
+    assert frames[-1].final_risk_level == scenario.risk_level
+    assert all(
+        frame.final_risk_level == scenario.risk_level for frame in frames
+    )
+    assert frames[-1].vehicle_id == f"scenario-{scenario.scenario_id}"
 
 
 @pytest.mark.asyncio
