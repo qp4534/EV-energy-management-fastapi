@@ -39,6 +39,7 @@ import pipeline_agent as PIPE
 import valuation as VAL
 import economics as ECO
 import pdf_report as PDF
+import buyer_lookup as BUYER
 
 SENSOR_COLS = ["discharge_time_s", "decrement_36_34v_s", "max_volt_dischg_v",
                "min_volt_charg_v", "time_at_415v_s", "time_cc_s", "charging_time_s"]
@@ -308,6 +309,11 @@ def report_pdf(req: PdfReportRequest):
     if req.buyer_index >= len(offers):
         raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
     chosen = offers[req.buyer_index]
+    # 실시간 검색으로 매입처 최신 정보를 찾을 수 있으면 정적 문구를 덮어쓴다.
+    # 검색 실패/키 없음이면 valuation.py의 기존 정적 "확인된 사실" 문구를 그대로 씀.
+    live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
+    if live_fact:
+        chosen = {**chosen, "확인된_사실": live_fact}
 
     eco_kwargs = {"chemistry": req.chemistry, "path": chosen["단가대"]}
     if req.new_price_krw is not None:
@@ -452,6 +458,11 @@ def report_pdf_full(req: PdfFullRequest):
     if req.buyer_index >= len(offers):
         raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
     chosen = offers[req.buyer_index]
+    # 실시간 검색으로 매입처 최신 정보를 찾을 수 있으면 정적 문구를 덮어쓴다.
+    # 검색 실패/키 없음이면 valuation.py의 기존 정적 "확인된 사실" 문구를 그대로 씀.
+    live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
+    if live_fact:
+        chosen = {**chosen, "확인된_사실": live_fact}
 
     eco_kwargs = {"chemistry": req.chemistry, "path": chosen["단가대"]}
     if req.new_price_krw is not None:
