@@ -144,8 +144,6 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
         # 상단 네이비 헤더
         canv.setFillColor(NAVY)
         canv.rect(0, PH - HEADER_H, PW, HEADER_H, stroke=0, fill=1)
-        canv.setFillColor(ACCENT)
-        canv.rect(0, PH - HEADER_H, PW, 2.2 * mm, stroke=0, fill=1)
 
         canv.setFillColor(colors.white)
         canv.setFont(FONT_B, 17)
@@ -391,8 +389,6 @@ def build_pdf_from_view(*, buyer_name: str, buyer_role: str = "", buyer_location
         canv.saveState()
         canv.setFillColor(NAVY)
         canv.rect(0, PH - HEADER_H, PW, HEADER_H, stroke=0, fill=1)
-        canv.setFillColor(ACCENT)
-        canv.rect(0, PH - HEADER_H, PW, 2.2 * mm, stroke=0, fill=1)
 
         canv.setFillColor(colors.white)
         canv.setFont(FONT_B, 17)
