@@ -21,7 +21,7 @@
 ## 데이터 생성
 
 각 시나리오의 1Hz 센서 프레임을 BMS 하이브리드 모델에 통과시켜
-최종 `TwinFrame`을 만들고 `runtime/scenarios/<scenario_id>/frames.jsonl`로 저장합니다.
+최종 `TwinFrame`을 만들고 `runtime/scenarios/<scenario_id>/frames.jsonl.gz`로 저장합니다.
 
 ```powershell
 python -m app.scenario_generator list
@@ -37,7 +37,7 @@ python -m app.scenario_generator generate --scenario all --with-thermal
 ## 실시간 재생
 
 차량 목록을 RDS(`CAR` + 최신 `ANOMALY_LOGS`)에서 읽어 시나리오에 매핑한 뒤,
-1초마다 미리 생성된 프레임을 Redis에 publish합니다. AI 재추론은 하지 않습니다.
+1초마다 미리 생성된 프레임(gzip 해제 후)을 Redis에 publish합니다. AI 재추론은 하지 않습니다.
 
 ```powershell
 python -m app.scenario_replay replay --scenario-dir runtime/scenarios

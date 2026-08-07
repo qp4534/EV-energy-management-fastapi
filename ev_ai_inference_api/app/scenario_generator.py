@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gzip
 import json
 import math
 from datetime import datetime, timedelta, timezone
@@ -285,12 +286,12 @@ def write_scenario_dataset(
     *,
     metadata_extra: dict[str, Any] | None = None,
 ) -> Path:
-    """Write frames.jsonl + metadata.json for one scenario dataset."""
+    """Write frames.jsonl.gz + metadata.json for one scenario dataset."""
 
     scenario_dir = Path(out_dir) / scenario.scenario_id
     scenario_dir.mkdir(parents=True, exist_ok=True)
-    frames_path = scenario_dir / "frames.jsonl"
-    with frames_path.open("w", encoding="utf-8") as handle:
+    frames_path = scenario_dir / "frames.jsonl.gz"
+    with gzip.open(frames_path, "wt", encoding="utf-8") as handle:
         for frame in frames:
             handle.write(frame.model_dump_json() + "\n")
     metadata = {
@@ -315,10 +316,12 @@ def write_scenario_dataset(
 
 
 def load_scenario_frames(path: Path) -> list[TwinFrame]:
-    """Load a previously generated frames.jsonl dataset."""
+    """Load a previously generated frames.jsonl(.gz) dataset."""
 
     frames: list[TwinFrame] = []
-    with Path(path).open("r", encoding="utf-8") as handle:
+    frames_path = Path(path)
+    opener = gzip.open if frames_path.suffix == ".gz" else open
+    with opener(frames_path, "rt", encoding="utf-8") as handle:
         for line in handle:
             stripped = line.strip()
             if stripped:

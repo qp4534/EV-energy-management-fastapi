@@ -123,7 +123,7 @@ async def test_dataset_write_and_load_round_trip(tmp_path) -> None:
         start_at=START,
     )
     scenario_dir = write_scenario_dataset(scenario, frames, tmp_path)
-    frames_path = scenario_dir / "frames.jsonl"
+    frames_path = scenario_dir / "frames.jsonl.gz"
     assert frames_path.is_file()
     assert (scenario_dir / "metadata.json").is_file()
     loaded = load_scenario_frames(frames_path)

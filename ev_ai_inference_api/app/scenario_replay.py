@@ -51,7 +51,10 @@ def load_datasets(scenario_dir: Path) -> dict[str, list[TwinFrame]]:
 
     datasets: dict[str, list[TwinFrame]] = {}
     for scenario in SCENARIOS:
-        frames_path = Path(scenario_dir) / scenario.scenario_id / "frames.jsonl"
+        scenario_path = Path(scenario_dir) / scenario.scenario_id
+        frames_path = scenario_path / "frames.jsonl.gz"
+        if not frames_path.is_file():
+            frames_path = scenario_path / "frames.jsonl"
         if frames_path.is_file():
             datasets[scenario.scenario_id] = load_scenario_frames(frames_path)
     if not datasets:
