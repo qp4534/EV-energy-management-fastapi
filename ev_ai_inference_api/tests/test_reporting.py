@@ -75,7 +75,11 @@ def job(report_type: ReportType) -> ReportJob:
         job_id=UUID("11111111-1111-1111-1111-111111111111"),
         job_key=f"{report_type}:test",
         job_type=report_type,
-        car_id=UUID("22222222-2222-2222-2222-222222222222"),
+        car_id=(
+            UUID("22222222-2222-2222-2222-222222222222")
+            if report_type == ReportType.ANOMALY
+            else None
+        ),
         anomaly_id=(
             UUID("33333333-3333-3333-3333-333333333333")
             if report_type == ReportType.ANOMALY
@@ -154,6 +158,7 @@ async def test_monthly_report_uses_deterministic_aggregates_when_llm_is_unavaila
     facts = {
         "periodStart": date(2026, 7, 1),
         "periodEndExclusive": date(2026, 8, 1),
+        "fleet": {"vehicle_count": 140},
         "chargingSessions": {
             "session_count": 4,
             "completed_session_count": 3,
@@ -180,7 +185,9 @@ async def test_monthly_report_uses_deterministic_aggregates_when_llm_is_unavaila
     assert report.llm_enhanced is False
     assert report.risk_level == "CAUTION"
     metrics = report.sections[1].items
-    assert {item["label"]: item["value"] for item in metrics}["충전 세션"] == 4
+    metrics_by_label = {item["label"]: item["value"] for item in metrics}
+    assert metrics_by_label["전체 차량"] == 140
+    assert metrics_by_label["충전 세션"] == 4
     assert report.period.from_date == date(2026, 7, 1)
     assert report.period.to_date == date(2026, 7, 31)
 
@@ -216,9 +223,9 @@ async def test_embedded_report_worker_stops_without_waiting_for_poll_timeout() -
         async def requeue_stale_running(self):
             return 0
 
-        async def enqueue_monthly_for_all(self, target_month):
+        async def enqueue_monthly_global(self, target_month):
             stop_event.set()
-            return 0
+            return UUID("55555555-5555-5555-5555-555555555555")
 
         async def claim_next(self):
             return None

@@ -17,7 +17,7 @@ class ReportJob:
     job_id: UUID
     job_key: str
     job_type: ReportType
-    car_id: UUID
+    car_id: UUID | None
     anomaly_id: UUID | None
     target_month: date | None
     retry_count: int
@@ -74,26 +74,19 @@ class PostgresReportRepository:
             )
         return UUID(str(existing_or_created))
 
-    async def enqueue_monthly(self, car_id: str | UUID, target_month: date) -> UUID:
-        car_uuid = UUID(str(car_id))
+    async def enqueue_monthly(self, target_month: date) -> UUID:
         if target_month.day != 1:
             target_month = target_month.replace(day=1)
         job_id = uuid4()
         async with self.sessions.begin() as session:
-            exists = await session.scalar(
-                text('SELECT 1 FROM public."CAR" WHERE car_id = :car_id'),
-                {"car_id": car_uuid},
-            )
-            if exists is None:
-                raise LookupError("vehicle does not exist")
             existing_or_created = await session.scalar(
                 text(
                     """
                     INSERT INTO ai_report_jobs (
-                        job_id, job_key, job_type, car_id, target_month,
+                        job_id, job_key, job_type, target_month,
                         status, available_at
                     ) VALUES (
-                        :job_id, :job_key, 'MONTHLY', :car_id, :target_month,
+                        :job_id, :job_key, 'MONTHLY', :target_month,
                         'PENDING', NOW()
                     )
                     ON CONFLICT (job_key) DO UPDATE SET updated_at = NOW()
@@ -102,21 +95,14 @@ class PostgresReportRepository:
                 ),
                 {
                     "job_id": job_id,
-                    "job_key": f"MONTHLY:{car_uuid}:{target_month:%Y-%m}",
-                    "car_id": car_uuid,
+                    "job_key": f"MONTHLY:GLOBAL:{target_month:%Y-%m}",
                     "target_month": target_month,
                 },
             )
         return UUID(str(existing_or_created))
 
-    async def enqueue_monthly_for_all(self, target_month: date) -> int:
-        async with self.sessions() as session:
-            car_ids = list(
-                await session.scalars(text('SELECT car_id FROM public."CAR"'))
-            )
-        for car_id in car_ids:
-            await self.enqueue_monthly(car_id, target_month)
-        return len(car_ids)
+    async def enqueue_monthly_global(self, target_month: date) -> UUID:
+        return await self.enqueue_monthly(target_month)
 
     async def claim_next(self) -> ReportJob | None:
         async with self.sessions.begin() as session:
@@ -150,7 +136,7 @@ class PostgresReportRepository:
             job_id=UUID(str(row["job_id"])),
             job_key=row["job_key"],
             job_type=ReportType(row["job_type"]),
-            car_id=UUID(str(row["car_id"])),
+            car_id=(UUID(str(row["car_id"])) if row["car_id"] else None),
             anomaly_id=(
                 UUID(str(row["anomaly_id"])) if row["anomaly_id"] else None
             ),
@@ -291,16 +277,16 @@ class PostgresReportRepository:
             period_end = date(period_start.year, period_start.month + 1, 1)
 
         async with self.sessions() as session:
-            car = (
+            fleet = (
                 await session.execute(
                     text(
-                        'SELECT car_id, model, nickname FROM public."CAR" WHERE car_id = :car_id'
-                    ),
-                    {"car_id": job.car_id},
+                        """
+                        SELECT COUNT(*)::integer AS vehicle_count
+                        FROM public."CAR"
+                        """
+                    )
                 )
-            ).mappings().first()
-            if car is None:
-                raise LookupError("vehicle no longer exists")
+            ).mappings().one()
 
             sessions = (
                 await session.execute(
@@ -318,13 +304,11 @@ class PostgresReportRepository:
                                 FILTER (WHERE start_soc IS NOT NULL AND end_soc IS NOT NULL)
                                 AS average_soc_change
                         FROM public."CHARGING_SESSION"
-                        WHERE car_id = :car_id
-                          AND start_time >= :period_start
+                        WHERE start_time >= :period_start
                           AND start_time < :period_end
                         """
                     ),
                     {
-                        "car_id": job.car_id,
                         "period_start": period_start,
                         "period_end": period_end,
                     },
@@ -336,15 +320,13 @@ class PostgresReportRepository:
                         """
                         SELECT risk_level, COUNT(*)::integer AS count
                         FROM public."ANOMALY_LOGS"
-                        WHERE car_id = :car_id
-                          AND detected_at >= :period_start
+                        WHERE detected_at >= :period_start
                           AND detected_at < :period_end
                         GROUP BY risk_level
                         ORDER BY risk_level
                         """
                     ),
                     {
-                        "car_id": job.car_id,
                         "period_start": period_start,
                         "period_end": period_end,
                     },
@@ -365,13 +347,11 @@ class PostgresReportRepository:
                                 THEN (model_input->>'temp_max_c')::double precision
                             END) AS highest_temperature_c
                         FROM public."TWIN_FRAMES"
-                        WHERE car_id = :car_id
-                          AND observed_at >= :period_start
+                        WHERE observed_at >= :period_start
                           AND observed_at < :period_end
                         """
                     ),
                     {
-                        "car_id": job.car_id,
                         "period_start": period_start,
                         "period_end": period_end,
                     },
@@ -379,7 +359,7 @@ class PostgresReportRepository:
             ).mappings().one()
 
         return {
-            "car": dict(car),
+            "fleet": dict(fleet),
             "periodStart": period_start,
             "periodEndExclusive": period_end,
             "chargingSessions": dict(sessions),

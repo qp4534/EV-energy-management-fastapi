@@ -63,12 +63,12 @@ async def run_loop(
         if time.monotonic() >= next_monthly_check:
             try:
                 recovered = await repository.requeue_stale_running()
-                count = await repository.enqueue_monthly_for_all(
+                monthly_job_id = await repository.enqueue_monthly_global(
                     previous_month(datetime.now(timezone.utc))
                 )
                 LOGGER.info(
-                    "ensured previous-month jobs for %d vehicles; recovered %d stale jobs",
-                    count,
+                    "ensured global previous-month job %s; recovered %d stale jobs",
+                    monthly_job_id,
                     recovered,
                 )
             except Exception:

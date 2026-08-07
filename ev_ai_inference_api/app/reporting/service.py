@@ -376,10 +376,12 @@ class ReportGenerationService:
         sessions = facts.get("chargingSessions") or {}
         anomaly_rows = facts.get("anomalies") or []
         sensor = facts.get("sensorSummary") or {}
+        fleet = facts.get("fleet") or {}
         anomaly_count = sum(int(row.get("count") or 0) for row in anomaly_rows)
         risk = _highest_risk([row.get("risk_level") for row in anomaly_rows])
 
         metrics = [
+            _metric("전체 차량", int(fleet.get("vehicle_count") or 0), "대"),
             _metric("충전 세션", int(sessions.get("session_count") or 0), "회"),
             _metric(
                 "완료된 충전 세션",
@@ -426,6 +428,7 @@ class ReportGenerationService:
             f"전기차 월간 안전 점검 위험등급 {risk} 충전 배터리 권장 조치"
         )
         llm_facts = {
+            "fleet": fleet,
             "periodStart": start,
             "periodEndExclusive": end_exclusive,
             "chargingSessions": sessions,
@@ -476,7 +479,7 @@ class ReportGenerationService:
             missing.append("averageSocChange")
         if not chunks:
             missing.append("ragEvidence")
-        return f"월간 안전 보고서 - {start:%Y-%m}", GeneratedReport(
+        return f"전체 차량 통합 월간 안전보고서 - {start:%Y-%m}", GeneratedReport(
             report_type=ReportType.MONTHLY,
             llm_enhanced=enhancement is not None,
             data_as_of=self.now(),

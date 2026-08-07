@@ -16,7 +16,7 @@ from .schemas import JobResponse, MonthlyJobRequest
 class JobQueue(Protocol):
     async def enqueue_anomaly(self, anomaly_id: str): ...
 
-    async def enqueue_monthly(self, car_id: str, target_month: date): ...
+    async def enqueue_monthly(self, target_month: date): ...
 
 
 def create_report_job_app(queue: JobQueue | None = None) -> FastAPI:
@@ -91,13 +91,9 @@ def create_report_job_app(queue: JobQueue | None = None) -> FastAPI:
         authorize(request, x_internal_token)
         target_month = date.fromisoformat(f"{payload.target_month}-01")
         try:
-            job_id = await request.app.state.report_jobs.enqueue_monthly(
-                payload.car_id, target_month
-            )
+            job_id = await request.app.state.report_jobs.enqueue_monthly(target_month)
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid carId") from exc
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail="invalid targetMonth") from exc
         return JobResponse(job_id=str(job_id), status="PENDING")
 
     return application

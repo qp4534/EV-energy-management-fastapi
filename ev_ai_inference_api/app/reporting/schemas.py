@@ -82,7 +82,6 @@ class NarrativeEnhancement(BaseModel):
 
 
 class MonthlyJobRequest(ApiModel):
-    car_id: str = Field(min_length=1, max_length=128)
     target_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
