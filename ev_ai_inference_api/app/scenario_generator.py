@@ -34,6 +34,7 @@ from app.services.twin_service import _STAGE_LEVEL, build_model_request
 
 SCENARIO_FRAME_COUNT = 3_600  # 1 hour at 1 Hz
 HISTORY_FRAME_COUNT = 10_800  # incident -1h ~ +2h at 1 Hz
+HISTORY_PRE_SECONDS = 3_600  # incident trigger offset from window start
 THERMAL_INTERVAL_SECONDS = 5
 HOTSPOT_CELL_INDEX = 51
 HOTSPOT_MODULE_START = (HOTSPOT_CELL_INDEX // 8) * 8
