@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime
 import math
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,6 +100,24 @@ def record_to_frame(record: TwinFrameRecord, vehicle_id: str) -> TwinFrame:
 
 
 class TwinRepository:
+    async def latest_abnormal_type_for_car(
+        self,
+        session: AsyncSession,
+        car_id: str,
+    ) -> str | None:
+        return await session.scalar(
+            text(
+                """
+                SELECT a."abnormal_type"
+                FROM "ANOMALY_LOGS" AS a
+                WHERE a."car_id" = :car_id
+                ORDER BY a."detected_at" DESC
+                LIMIT 1
+                """
+            ),
+            {"car_id": car_id},
+        )
+
     async def create_incident(
         self,
         session: AsyncSession,

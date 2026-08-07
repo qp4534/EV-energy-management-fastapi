@@ -40,7 +40,7 @@ python -m app.scenario_generator generate --scenario all --with-thermal
 1초마다 미리 생성된 프레임(gzip 해제 후)을 Redis에 publish합니다. AI 재추론은 하지 않습니다.
 
 ```powershell
-python -m app.scenario_replay replay --scenario-dir runtime/scenarios
+python -m app.scenario_replay --scenario-dir runtime/scenarios
 ```
 
 DB 없이 로컬 테스트하려면 차량 할당 파일을 사용합니다.
@@ -58,9 +58,21 @@ DB 없이 로컬 테스트하려면 차량 할당 파일을 사용합니다.
 ```
 
 ```powershell
-python -m app.scenario_replay replay `
+python -m app.scenario_replay `
   --scenario-dir runtime/scenarios `
   --assignments-file runtime/assignments.json `
+  --speed 60
+```
+
+## S3 로드
+
+재생 데이터를 S3에서 직접 로드하려면 `--s3-bucket`/`--s3-prefix`를 사용합니다.
+`manifest.json`과 `frames.jsonl.gz`가 업로드되어 있어야 합니다.
+
+```powershell
+python -m app.scenario_replay `
+  --s3-bucket ev-platform-thermal-data `
+  --s3-prefix digital-twin/scenarios `
   --speed 60
 ```
 

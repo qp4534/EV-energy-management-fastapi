@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.twin_redis import TwinRedisStore
 from app.db.anomaly_persistence import AnomalyPersistence
 from app.db.repository import TwinRepository
+from app.scenario_catalog import scenario_for_abnormal_type
 from app.schemas.current_stage import SampleRequest
 from app.schemas.twins import (
     IncidentListResponse,
@@ -59,6 +60,18 @@ def validate_vehicle_id(vehicle_id: str) -> str:
             "vehicle_id must be 1-128 URL-safe letters, digits, dots, colons, underscores, or hyphens"
         )
     return vehicle_id
+
+
+def resolve_history_vehicle_id(
+    vehicle_id: str,
+    abnormal_type: str | None,
+) -> str:
+    """Map a car UUID to its scenario history vehicle; scenario ids pass through."""
+
+    if vehicle_id.startswith("scenario-"):
+        return vehicle_id
+    scenario = scenario_for_abnormal_type(abnormal_type)
+    return f"scenario-{scenario.scenario_id}"
 
 
 def temperature_level(temperature_decic: int) -> int:
@@ -285,8 +298,9 @@ class TwinService:
     async def incidents(self, vehicle_id: str) -> IncidentListResponse:
         validate_vehicle_id(vehicle_id)
         async with self.sessions() as session:
+            resolved = await self._resolve_history_vehicle(session, vehicle_id)
             return IncidentListResponse(
-                items=await self.repository.list_incidents(session, vehicle_id)
+                items=await self.repository.list_incidents(session, resolved)
             )
 
     async def latest_history(
@@ -296,8 +310,9 @@ class TwinService:
         if not 1 <= resolution_seconds <= 3_600:
             raise ValueError("resolution_seconds must be between 1 and 3600")
         async with self.sessions() as session:
+            resolved = await self._resolve_history_vehicle(session, vehicle_id)
             incident = await self.repository.latest_complete_incident(
-                session, vehicle_id
+                session, resolved
             )
             if incident is None:
                 raise IncidentNotFound(
@@ -317,8 +332,9 @@ class TwinService:
         if not 1 <= resolution_seconds <= 3_600:
             raise ValueError("resolution_seconds must be between 1 and 3600")
         async with self.sessions() as session:
+            resolved = await self._resolve_history_vehicle(session, vehicle_id)
             incident = await self.repository.complete_incident(
-                session, vehicle_id, incident_id
+                session, resolved, incident_id
             )
             if incident is None:
                 raise IncidentNotFound(
@@ -369,3 +385,17 @@ class TwinService:
     async def _vehicle_lock(self, vehicle_id: str) -> asyncio.Lock:
         async with self._locks_guard:
             return self._locks.setdefault(vehicle_id, asyncio.Lock())
+
+    async def _resolve_history_vehicle(
+        self,
+        session: AsyncSession,
+        vehicle_id: str,
+    ) -> str:
+        if vehicle_id.startswith("scenario-"):
+            return vehicle_id
+        abnormal_type = (
+            await self.repository.latest_abnormal_type_for_car(
+                session, vehicle_id
+            )
+        )
+        return resolve_history_vehicle_id(vehicle_id, abnormal_type)
