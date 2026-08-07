@@ -19,6 +19,8 @@
     POST /agents/value-assessor   — Agent 3만 단독 호출 (RUL + 매각가)
     POST /pipeline                — Agent 1→2→3 게이트 파이프라인 (+ 선택적 Claude 종합)
     POST /report/pdf              — 매도 제안서 PDF 생성 (Agent 1→2→3 + 매입처 매칭 + PDF 렌더링)
+    POST /report/pdf/full         — 이미 계산된 진단결과로 매입처 매칭+경제성까지 포함한 정식 PDF
+    POST /report/pdf/from-view    — 화면에 뜬 값 그대로만 렌더링(매입처 매칭/경제성 없음, 단순 버전)
 """
 import os
 import io
@@ -411,6 +413,65 @@ def diagnose_erd(req: ErdDiagnoseRequest):
         "charge_health_score": int(round(ind["charge"] * 100)),
         "voltage_stability_score": int(round(ind["stability"] * 100)),
     }
+
+
+class IndicatorsView(BaseModel):
+    life: float
+    capacity: float
+    charge: float
+    stability: float
+
+
+class PdfFullRequest(BaseModel):
+    """이미 계산되어 저장된 진단 결과(등급/RUL/건강도/세부지표)를 받아, 원본 센서값 없이도
+    /report/pdf와 똑같이 매입처 매칭(estimate_offers)·경제성(economics.compute)까지 포함한
+    정식 문서를 만든다. Agent1~3을 다시 돌리지 않는다 - 화면에 이미 뜬 숫자를 근거로만 쓴다."""
+    capacity_kwh: float = Field(..., gt=0)
+    grade: str
+    rul_cycles: float
+    full_life: float
+    health_pct: float
+    indicators: IndicatorsView
+    buyer_index: int = Field(0, ge=0)
+    chemistry: str = "NMC811"
+    new_price_krw: float | None = None
+
+
+@app.post("/report/pdf/full")
+def report_pdf_full(req: PdfFullRequest):
+    """매입처 매칭 + 경제성 계산까지 포함한 정식 매도 제안서 PDF (실제 회사 제출용 수준)."""
+    if req.grade not in ("1등급", "2등급", "3등급"):
+        raise HTTPException(400, "grade는 '1등급'|'2등급'|'3등급' 중 하나여야 합니다.")
+
+    indicators = req.indicators.model_dump()
+    condition = sum(indicators.values()) / len(indicators)
+
+    offers = VAL.estimate_offers(req.grade, req.capacity_kwh, condition)
+    if not offers:
+        raise HTTPException(422, f"'{req.grade}' 등급을 매입해줄 매입처가 없습니다.")
+    if req.buyer_index >= len(offers):
+        raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
+    chosen = offers[req.buyer_index]
+
+    eco_kwargs = {"chemistry": req.chemistry, "path": chosen["단가대"]}
+    if req.new_price_krw is not None:
+        eco_kwargs["new_price_krw"] = req.new_price_krw
+    eco = ECO.compute(req.capacity_kwh, chosen["제안가_원"], req.grade, req.health_pct, **eco_kwargs)
+
+    pdf_bytes = PDF.build_pdf(
+        buyer=chosen, capacity_kwh=req.capacity_kwh, grade=req.grade,
+        rul_cycles=req.rul_cycles, health_pct=req.health_pct, indicators=indicators,
+        full_life=req.full_life, won=VAL.won, eco=eco,
+    )
+
+    from urllib.parse import quote
+    fname = quote(f"매도제안서_{chosen['매입처'].split()[0]}_{req.capacity_kwh:g}kWh.pdf")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=battery_proposal.pdf; "
+                                        f"filename*=UTF-8''{fname}"},
+    )
 
 
 class HealthMetricView(BaseModel):
