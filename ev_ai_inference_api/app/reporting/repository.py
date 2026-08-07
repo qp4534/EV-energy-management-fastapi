@@ -200,9 +200,33 @@ class PostgresReportRepository:
                             frame.image_risk_level,
                             frame.image_confidence,
                             frame.raw_metrics,
-                            frame.model_input
+                            frame.model_input,
+                            COALESCE(soh_current.soh_score, battery.soh_score)
+                                AS soh_score,
+                            soh_previous.soh_score AS previous_soh_score,
+                            battery.charge_cycles,
+                            battery.current_temp AS passport_current_temp
                         FROM public."ANOMALY_LOGS" a
                         LEFT JOIN public."CAR" c ON c.car_id = a.car_id
+                        LEFT JOIN public."BATTERY_PASSPORT" battery
+                            ON battery.car_id = a.car_id
+                        LEFT JOIN LATERAL (
+                            SELECT history.soh_score
+                            FROM public."BATTERY_SOH_HISTORY" history
+                            WHERE history.battery_id = battery.battery_id
+                              AND history.recorded_at <= a.detected_at
+                            ORDER BY history.recorded_at DESC
+                            LIMIT 1
+                        ) soh_current ON TRUE
+                        LEFT JOIN LATERAL (
+                            SELECT history.soh_score
+                            FROM public."BATTERY_SOH_HISTORY" history
+                            WHERE history.battery_id = battery.battery_id
+                              AND history.recorded_at <= a.detected_at
+                            ORDER BY history.recorded_at DESC
+                            OFFSET 1
+                            LIMIT 1
+                        ) soh_previous ON TRUE
                         LEFT JOIN LATERAL (
                             SELECT *
                             FROM public."TWIN_FRAMES" tf
@@ -216,11 +240,44 @@ class PostgresReportRepository:
                     {"anomaly_id": job.anomaly_id},
                 )
             ).mappings().first()
+            temperature_rows = []
+            if row is not None:
+                temperature_rows = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT
+                                date_trunc('hour', observed_at) AS observed_hour,
+                                MAX((model_input->>'temp_max_c')::double precision)
+                                    AS temperature_c
+                            FROM public."TWIN_FRAMES"
+                            WHERE car_id = :car_id
+                              AND observed_at >= :detected_at - INTERVAL '24 hours'
+                              AND observed_at <= :detected_at
+                              AND model_input->>'temp_max_c'
+                                  ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                            GROUP BY date_trunc('hour', observed_at)
+                            ORDER BY observed_hour
+                            """
+                        ),
+                        {
+                            "car_id": row["car_id"],
+                            "detected_at": row["detected_at"],
+                        },
+                    )
+                ).mappings().all()
         if row is None:
             raise LookupError("anomaly data no longer exists")
         result = dict(row)
         result["model_input"] = _json_object(result.get("model_input"))
         result["raw_metrics"] = _json_object(result.get("raw_metrics"))
+        result["temperature_history"] = [
+            {
+                "observed_at": item["observed_hour"],
+                "temperature_c": item["temperature_c"],
+            }
+            for item in temperature_rows
+        ]
         return result
 
     async def load_monthly_facts(self, job: ReportJob) -> dict[str, Any]:

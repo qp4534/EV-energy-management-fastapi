@@ -45,6 +45,7 @@ class ReportSection(ApiModel):
     items: list[Any] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
     datasets: list[dict[str, Any]] = Field(default_factory=list)
+    unit: str | None = None
 
 
 class ReportPeriod(ApiModel):

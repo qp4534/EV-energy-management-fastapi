@@ -17,6 +17,8 @@ from .schemas import (
     ReportType,
 )
 
+KST = timezone(timedelta(hours=9))
+
 
 class ReportDataRepository(Protocol):
     async def load_anomaly_facts(self, job: ReportJob) -> dict[str, Any]: ...
@@ -82,11 +84,45 @@ def _highest_risk(values: list[Any]) -> str:
     return max(labels, key=order.__getitem__, default="NORMAL")
 
 
-def _metric(label: str, value: Any, unit: str | None = None) -> dict[str, Any]:
+def _metric(
+    label: str,
+    value: Any,
+    unit: str | None = None,
+    *,
+    caption: str | None = None,
+    emphasis: str | None = None,
+) -> dict[str, Any]:
     result = {"label": label, "value": value}
     if unit:
         result["unit"] = unit
+    if caption:
+        result["caption"] = caption
+    if emphasis:
+        result["emphasis"] = emphasis
     return result
+
+
+def _number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _voltage_deviation_v(raw_metrics: dict[str, Any]) -> float | None:
+    twin_frame = raw_metrics.get("twin_frame")
+    if not isinstance(twin_frame, dict):
+        return None
+    values = twin_frame.get("voltage_mv")
+    if not isinstance(values, list):
+        return None
+    numeric = [_number(value) for value in values]
+    numeric = [value for value in numeric if value is not None]
+    if len(numeric) < 2:
+        return None
+    return round((max(numeric) - min(numeric)) / 1_000.0, 3)
 
 
 class ReportGenerationService:
@@ -148,20 +184,78 @@ class ReportGenerationService:
         risk = _risk_label(facts.get("risk_level") or facts.get("final_risk_level"))
         abnormal_type = facts.get("abnormal_type") or "분류되지 않은 이상"
         model_input = facts.get("model_input") or {}
-        metrics = [
-            _metric("발생 시각", detected_at.isoformat() if isinstance(detected_at, datetime) else str(detected_at)),
-            _metric("위험등급", risk),
+        raw_metrics = facts.get("raw_metrics") or {}
+        temperature = _number(model_input.get("temp_max_c"))
+        temperature_caption = "이상 감지 시점 최고값"
+        if temperature is None:
+            temperature = _number(facts.get("passport_current_temp"))
+            temperature_caption = "배터리 패스포트 최신값"
+
+        soh = _number(facts.get("soh_score"))
+        previous_soh = _number(facts.get("previous_soh_score"))
+        soh_delta = (
+            round(soh - previous_soh, 1)
+            if soh is not None and previous_soh is not None
+            else None
+        )
+        voltage_deviation = _voltage_deviation_v(raw_metrics)
+        charge_cycles = facts.get("charge_cycles")
+        detected_value = (
+            detected_at.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+            if isinstance(detected_at, datetime)
+            else str(detected_at)
+        )
+        risk_display = {
+            "EMERGENCY": "긴급",
+            "WARNING": "경고",
+            "CAUTION": "주의",
+            "NORMAL": "정상",
+            "UNKNOWN": "미확인",
+        }[risk]
+        detection_metrics = [
+            _metric("발생 시각", detected_value),
+            _metric("위험등급", risk_display),
             _metric("이상 유형", abnormal_type),
         ]
-        known_fields = (
-            ("temp_max_c", "최고 배터리 온도", "°C"),
-            ("temp_mean_c", "평균 배터리 온도", "°C"),
-            ("temp_delta_c", "배터리 온도 편차", "°C"),
-            ("voltage_v", "평균 셀 전압", "V"),
-        )
-        for key, label, unit in known_fields:
-            if model_input.get(key) is not None:
-                metrics.append(_metric(label, model_input[key], unit))
+        metrics = [
+            _metric(
+                "배터리 온도",
+                round(temperature, 1) if temperature is not None else "확인 불가",
+                "°C" if temperature is not None else None,
+                caption=temperature_caption if temperature is not None else "측정 데이터 없음",
+                emphasis=(
+                    "danger"
+                    if temperature is not None and temperature >= 45
+                    else None
+                ),
+            ),
+            _metric(
+                "SOH 변동",
+                f"{soh_delta:+.1f}" if soh_delta is not None else "확인 불가",
+                "%p" if soh_delta is not None else None,
+                caption=(
+                    f"현재 SOH {soh:.1f}% · 이전 진단 대비"
+                    if soh_delta is not None
+                    else "비교 가능한 SOH 이력 없음"
+                ),
+            ),
+            _metric(
+                "전압 편차",
+                voltage_deviation if voltage_deviation is not None else "확인 불가",
+                "V" if voltage_deviation is not None else None,
+                caption=(
+                    "96개 셀의 최대·최소 전압 차이"
+                    if voltage_deviation is not None
+                    else "셀별 전압 데이터 없음"
+                ),
+            ),
+            _metric(
+                "누적 충전 사이클",
+                charge_cycles if charge_cycles is not None else "확인 불가",
+                "회" if charge_cycles is not None else None,
+                caption="배터리 패스포트 기준",
+            ),
+        ]
 
         summary = f"{detected_at:%Y-%m-%d %H:%M}에 {abnormal_type} 이상이 감지되었습니다."
         query = f"{abnormal_type} 위험등급 {risk} 안전 조치 전기차 배터리 충전"
@@ -185,11 +279,50 @@ class ReportGenerationService:
                 "model_input",
             )
         }
+        llm_facts["report_metrics"] = metrics
         enhancement = await self._enhance(llm_facts, chunks)
         sections = [
             ReportSection(type="summary", title="이상 상황 요약", content=summary),
-            ReportSection(type="metricGrid", title="감지 데이터", items=metrics),
+            ReportSection(
+                type="metricGrid",
+                title="이상 감지 정보",
+                items=detection_metrics,
+            ),
+            ReportSection(type="metricGrid", title="이상 지표", items=metrics),
         ]
+        temperature_history = facts.get("temperature_history") or []
+        chart_points = [
+            item
+            for item in temperature_history
+            if isinstance(item, dict)
+            and item.get("observed_at") is not None
+            and _number(item.get("temperature_c")) is not None
+        ]
+        if chart_points:
+            sections.append(
+                ReportSection(
+                    type="lineChart",
+                    title="최근 24시간 온도 추이",
+                    unit="°C",
+                    labels=[
+                        (
+                            item["observed_at"].strftime("%m/%d %H시")
+                            if isinstance(item["observed_at"], datetime)
+                            else str(item["observed_at"])
+                        )
+                        for item in chart_points
+                    ],
+                    datasets=[
+                        {
+                            "label": "최고 배터리 온도",
+                            "data": [
+                                round(float(item["temperature_c"]), 1)
+                                for item in chart_points
+                            ],
+                        }
+                    ],
+                )
+            )
         if enhancement is not None:
             sections[0] = ReportSection(
                 type="summary", title="이상 상황 요약", content=enhancement.summary
@@ -197,16 +330,16 @@ class ReportGenerationService:
             if enhancement.interpretation:
                 sections.append(
                     ReportSection(
-                        type="summary",
-                        title="데이터 해석",
-                        content=enhancement.interpretation,
+                        type="numberedList",
+                        title="원인 분석",
+                        items=[enhancement.interpretation],
                     )
                 )
             if enhancement.recommended_actions:
                 sections.append(
                     ReportSection(
                         type="bulletList",
-                        title="권장 안전 조치",
+                        title="권장 조치",
                         items=enhancement.recommended_actions,
                     )
                 )
@@ -215,6 +348,14 @@ class ReportGenerationService:
             missing.append("twinFrame")
         if not model_input:
             missing.append("modelInput")
+        if soh_delta is None:
+            missing.append("sohHistory")
+        if voltage_deviation is None:
+            missing.append("cellVoltages")
+        if charge_cycles is None:
+            missing.append("chargeCycles")
+        if not chart_points:
+            missing.append("temperatureHistory")
         if not chunks:
             missing.append("ragEvidence")
         title = f"이상 보고서 - {detected_at:%Y-%m-%d %H:%M}"

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
@@ -94,6 +94,16 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
         "risk_level": "경고",
         "frame_observed_at": NOW,
         "model_input": {"temp_max_c": 61.2, "voltage_v": 3.91},
+        "raw_metrics": {
+            "twin_frame": {"voltage_mv": [3800, 3910, 4140]}
+        },
+        "soh_score": 94.2,
+        "previous_soh_score": 96.0,
+        "charge_cycles": 342,
+        "temperature_history": [
+            {"observed_at": NOW - timedelta(hours=1), "temperature_c": 38.4},
+            {"observed_at": NOW, "temperature_c": 61.2},
+        ],
     }
     service = ReportGenerationService(
         FakeReportData(anomaly=facts),
@@ -108,8 +118,30 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
     assert payload["reportType"] == "이상"
     assert report.risk_level == "WARNING"
     assert report.llm_enhanced is True
-    metric_items = payload["sections"][1]["items"]
-    assert {item["label"]: item["value"] for item in metric_items}["최고 배터리 온도"] == 61.2
+    detection_section = next(
+        section for section in payload["sections"] if section["title"] == "이상 감지 정보"
+    )
+    detection_by_label = {
+        item["label"]: item["value"] for item in detection_section["items"]
+    }
+    assert detection_by_label["발생 시각"] == "2026-08-06 21:00:00 KST"
+    assert detection_by_label["위험등급"] == "경고"
+    assert detection_by_label["이상 유형"] == "BMS_SAFETY_ALERT"
+    metric_section = next(
+        section for section in payload["sections"] if section["title"] == "이상 지표"
+    )
+    metric_items = metric_section["items"]
+    metrics_by_label = {item["label"]: item for item in metric_items}
+    assert metrics_by_label["배터리 온도"]["value"] == 61.2
+    assert metrics_by_label["SOH 변동"]["value"] == "-1.8"
+    assert metrics_by_label["전압 편차"]["value"] == 0.34
+    assert metrics_by_label["누적 충전 사이클"]["value"] == 342
+    chart = next(section for section in payload["sections"] if section["type"] == "lineChart")
+    assert chart["title"] == "최근 24시간 온도 추이"
+    assert chart["datasets"][0]["data"] == [38.4, 61.2]
+    assert chart["unit"] == "°C"
+    assert any(section["title"] == "원인 분석" for section in payload["sections"])
+    assert any(section["title"] == "권장 조치" for section in payload["sections"])
     serialized = report.model_dump_json(by_alias=True)
     assert "작성자" not in serialized
     assert "검토자" not in serialized
