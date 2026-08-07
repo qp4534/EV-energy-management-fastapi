@@ -107,3 +107,34 @@ jobs:
           ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
             "export KUBECONFIG=~/.kube/config
              kubectl apply -f https://raw.githubusercontent.com/${{ env.GITOPS_REPOSITORY }}/main/argocd/fastapi-application.yaml"
+
+      - name: Verify FastAPI rollout
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "set -eu
+             export KUBECONFIG=~/.kube/config
+             target_image='${{ env.IMAGE }}:${{ github.sha }}'
+             for attempt in \$(seq 1 30); do
+               deployed_image=\$(kubectl get deployment ev-ai-inference-api -n fastapi -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+               if [ \"\$deployed_image\" = \"\$target_image\" ]; then
+                 break
+               fi
+               sleep 10
+             done
+             if [ \"\$deployed_image\" != \"\$target_image\" ]; then
+               echo 'FastAPI deployment did not receive the requested image.'
+               kubectl get deployment,pods,svc,endpoints -n fastapi -o wide || true
+               exit 1
+             fi
+             if ! kubectl rollout status deployment/ev-ai-inference-api -n fastapi --timeout=180s; then
+               kubectl get deployment,pods,svc,endpoints -n fastapi -o wide || true
+               kubectl logs deployment/ev-ai-inference-api -n fastapi --tail=100 || true
+               exit 1
+             fi
+             kubectl get deployment,pods,svc,endpoints -n fastapi -o wide"
