@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -179,3 +180,20 @@ async def test_vehicle_state_uses_current_snapshot_without_inventing_metrics() -
     assert result.data_as_of == NOW
     assert result.metadata["vehicleState"]["batteryTemperatureMaxC"] == 42.0
     assert result.metadata["vehicleState"]["cellVoltageMinV"] == 3.8
+
+
+@pytest.mark.asyncio
+async def test_rag_failure_logs_traceback_without_query_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_query = "private diagnostic question"
+
+    with caplog.at_level(logging.ERROR, logger="ev-ai-chatbot"):
+        result = await service(FakeRag(fail=True), FakeGenerator()).answer(
+            ChatMessageRequest(message=private_query)
+        )
+
+    assert result.missing_fields == ["rag"]
+    assert "RAG search failed for route=RAG" in caplog.text
+    assert "RuntimeError: database down" in caplog.text
+    assert private_query not in caplog.text

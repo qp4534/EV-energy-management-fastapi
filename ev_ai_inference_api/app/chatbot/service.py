@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -10,6 +11,9 @@ from app.ai.contracts import RagRetriever, RetrievedChunk, TextGenerator, Vehicl
 
 from .schemas import ChatMessageRequest, ChatMessageResponse, SourceCitation
 from .supervisor import ChatRoute, ChatSupervisor
+
+
+LOGGER = logging.getLogger("ev-ai-chatbot")
 
 
 _EMERGENCY_BASELINE = (
@@ -155,6 +159,9 @@ class ChatbotService:
         try:
             return await self.rag.search(query, route=route.value), False
         except Exception:
+            # Avoid logging the user's question; the traceback is sufficient for
+            # diagnosing embedding, pgvector, and database failures.
+            LOGGER.exception("RAG search failed for route=%s", route.value)
             return [], True
 
     async def _emergency(self, message: str) -> ChatMessageResponse:
