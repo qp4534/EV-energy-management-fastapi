@@ -18,6 +18,7 @@
     POST /agents/status-classifier — Agent 2만 단독 호출 (SOH 등급)
     POST /agents/value-assessor   — Agent 3만 단독 호출 (RUL + 매각가)
     POST /pipeline                — Agent 1→2→3 게이트 파이프라인 (+ 선택적 Claude 종합)
+    POST /report/pdf              — 매도 제안서 PDF 생성 (Agent 1→2→3 + 매입처 매칭 + PDF 렌더링)
 """
 import os
 import io
@@ -34,6 +35,8 @@ from pydantic import BaseModel, Field
 
 import pipeline_agent as PIPE
 import valuation as VAL
+import economics as ECO
+import pdf_report as PDF
 
 SENSOR_COLS = ["discharge_time_s", "decrement_36_34v_s", "max_volt_dischg_v",
                "min_volt_charg_v", "time_at_415v_s", "time_cc_s", "charging_time_s"]
@@ -252,6 +255,80 @@ def pipeline(req: PipelineRequest):
         )
     except RuntimeError as e:
         raise HTTPException(500, str(e))
+
+
+class PdfReportRequest(BaseModel):
+    sensor_values: SensorValues
+    fire_values: FireValues
+    capacity_kwh: float = Field(64.0, gt=0)
+    buyer_index: int = Field(
+        0, ge=0, description="estimate_offers() 결과 중 몇 번째 매입처로 제안서를 "
+                             "만들지 (0 = 최고 제안가). 관리자 웹에서 매입처를 고르게 "
+                             "하려면 먼저 /pipeline으로 목록을 받아 인덱스를 골라야 함.")
+    chemistry: str = Field("NMC811", description="배터리 화학조성 — 탄소 절감량 계산에 사용")
+    new_price_krw: Optional[float] = Field(
+        None, description="신품 팩 단가(원/kWh). 생략하면 economics.py 기본값(BNEF 국제시세) 사용.")
+
+
+@app.post("/report/pdf")
+def report_pdf(req: PdfReportRequest):
+    """매도 제안서 PDF 생성.
+
+    /pipeline과 같은 Agent1→2→3 계산을 거친 뒤, 매입처를 하나 골라
+    pdf_report.build_pdf()로 렌더링해 PDF 바이트를 그대로 스트리밍한다.
+    화재 위험 게이트(Agent1)에 걸리면 제안서를 만들지 않고 409를 반환한다.
+    """
+    feat = _derive_features(req.sensor_values.model_dump())
+
+    agent1 = PIPE.run_agent1_safety_guard(
+        req.fire_values.model_dump(),
+        fire_model=_MODELS["fire_model"], fire_model_bin=_MODELS["fire_model_bin"],
+        fire_features=_MODELS["fire_features"], fire_defaults=_MODELS["fire_defaults"],
+    )
+    if agent1["위험"]:
+        raise HTTPException(409, {
+            "message": "화재 위험 게이트에서 중단 — 즉시 폐기 대상이라 제안서를 만들지 않습니다.",
+            "agent1": agent1,
+        })
+
+    rul = max(0.0, float(_MODELS["rul_model"].predict(
+        np.array([[feat[f] for f in _MODELS["rul_features"]]]))[0]))
+    health_pct = min(100.0, rul / _MODELS["full_life_cycles"] * 100)
+    agent2 = PIPE.run_agent2_status_classifier(
+        feat, reuse_model=_MODELS["reuse_model"], reuse_features=_MODELS["reuse_features"])
+    grade = agent2["판정등급"]
+    ind = _MODELS["compute_indicators"](feat, rul)
+    condition = sum(ind.values()) / len(ind)
+
+    offers = VAL.estimate_offers(grade, req.capacity_kwh, condition)
+    if not offers:
+        raise HTTPException(422, f"'{grade}' 등급을 매입해줄 매입처가 없습니다.")
+    if req.buyer_index >= len(offers):
+        raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
+    chosen = offers[req.buyer_index]
+
+    eco_kwargs = {"chemistry": req.chemistry, "path": chosen["단가대"]}
+    if req.new_price_krw is not None:
+        eco_kwargs["new_price_krw"] = req.new_price_krw
+    eco = ECO.compute(req.capacity_kwh, chosen["제안가_원"], grade, health_pct, **eco_kwargs)
+
+    pdf_bytes = PDF.build_pdf(
+        buyer=chosen, capacity_kwh=req.capacity_kwh, grade=grade,
+        rul_cycles=rul, health_pct=health_pct, indicators=ind,
+        full_life=_MODELS["full_life_cycles"], won=VAL.won, eco=eco,
+        fire_note=agent1.get("판정", ""),
+    )
+
+    # Content-Disposition 헤더는 latin-1만 허용한다 - 한글 파일명은 RFC 5987
+    # filename*=UTF-8''... 형식으로 별도 인코딩해야 한다.
+    from urllib.parse import quote
+    fname = quote(f"매도제안서_{chosen['매입처'].split()[0]}_{req.capacity_kwh:g}kWh.pdf")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=battery_proposal.pdf; "
+                                        f"filename*=UTF-8''{fname}"},
+    )
 
 
 # ------------------------------------------------------------------

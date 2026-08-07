@@ -33,3 +33,5 @@ uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
 - `POST /pipeline` — 3단계 게이트 파이프라인 (+선택적 Claude 종합 리포트)
 - `POST /pipeline/batch-excel` — 엑셀 일괄 진단
 - **`POST /diagnose/erd`** — 위 파이프라인을 실행하고 **ERD 컬럼명**(`battery_level`, `reuse_status`, `grade_detail`, `reliability_score`, `rul`, `remaining_life_score`, `discharge_power_score`, `charge_health_score`, `voltage_stability_score`)으로 매핑해서 반환. `BATTERY_PASSPORT`/`BATTERY_DIAGNOSIS_METRICS` 테이블에 바로 적재하기 위한 용도. 응답 안에 스케일/매핑 관련 주의사항이 같이 내려가니 백엔드팀과 한 번 맞춰볼 것.
+- **`POST /report/pdf`** — 배터리 매도 제안서 PDF를 생성해 그대로 스트리밍 반환(`application/pdf`). Agent1~3을 실행한 뒤 `valuation.estimate_offers()`로 매입처를 매칭하고(`buyer_index`로 순위 선택, 기본 0 = 최고 제안가), `economics.compute()`로 경제성·탄소 절감을 계산해 `pdf_report.build_pdf()`로 렌더링한다. 화재 위험 게이트에 걸리면 제안서를 만들지 않고 409를 반환한다.
+  - 한글 폰트는 `fonts/NotoSansKR-Regular.ttf` / `NotoSansKR-Bold.ttf`(OFL 라이선스, `fonts/OFL.txt` 참고)를 이 저장소에 함께 담아 배포한다 — 배포 컨테이너(Linux)에는 시스템 한글 폰트가 없어서, 로컬 윈도우 전용 "맑은 고딕" 대신 리포에 번들된 폰트를 우선 쓰도록 `pdf_report.py`에서 처리했다.
