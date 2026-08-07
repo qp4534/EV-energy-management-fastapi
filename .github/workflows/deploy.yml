@@ -183,3 +183,49 @@ jobs:
              export KUBECONFIG=~/.kube/config
              pod=\$(kubectl get pod -n fastapi -l app=ev-ai-inference-api -o jsonpath='{.items[0].metadata.name}')
              kubectl exec -n fastapi \$pod -- sh -c \"printf '%s' '$SMOKE_SCRIPT_B64' | base64 -d | python -\""
+
+      - name: Smoke test FastAPI service from backend namespace
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          SMOKE_SCRIPT_B64="$(base64 -w0 <<'PY'
+          import json
+          import urllib.request
+          from datetime import datetime, timezone
+          from uuid import uuid4
+
+          payload = {
+              "schema_version": 1,
+              "layout_id": "generic_ev_concept_96_v1",
+              "session_id": str(uuid4()),
+              "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "sequence": 1,
+              "temperature_decic": [300] * 96,
+              "voltage_mv": [3600] * 96,
+              "connector_temperature_decic": [300, 300, 300],
+          }
+          request = urllib.request.Request(
+              "http://ev-ai-inference-api.fastapi.svc.cluster.local/api/v1/twins/vehicles/backend-smoke-test/samples",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  result = json.load(response)
+          except Exception as exc:
+              raise RuntimeError(f"backend-namespace FastAPI call failed: {exc}") from exc
+          if result["final_risk_level"] != 0 or result.get("anomaly_id") is not None:
+              raise RuntimeError(f"unexpected smoke response: {result}")
+          print("Backend namespace FastAPI service smoke test passed")
+          PY
+          )"
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no "ubuntu@$EC2_HOST" \
+            "set -eu
+             export KUBECONFIG=~/.kube/config
+             kubectl run fastapi-service-smoke -n backend --rm --attach --restart=Never \
+               --image=python:3.11-alpine --command -- sh -c \"printf '%s' '$SMOKE_SCRIPT_B64' | base64 -d | python -\""
