@@ -52,6 +52,8 @@ async def lifespan(app: FastAPI):
         engine, sessions = create_database(settings.database_url)
         redis = Redis.from_url(settings.redis_url, decode_responses=False)
         redis_store = TwinRedisStore(redis)
+        if settings.redis_required:
+            await redis_store.ping()
         app.state.database_engine = engine
         app.state.database_sessions = sessions
         anomaly_persistence = AnomalyPersistence(
@@ -139,6 +141,7 @@ async def lifespan(app: FastAPI):
         app.state.twin_ready = True
         app.state.ready = True
     except Exception as exc:
+        LOGGER.exception("FastAPI startup failed; readiness disabled")
         app.state.readiness_error = str(exc)
     try:
         yield

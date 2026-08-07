@@ -27,6 +27,7 @@ class Settings:
     thermal_inference_timeout_seconds: float = 0.8
     anomaly_persistence_enabled: bool = False
     report_jobs_enabled: bool = False
+    redis_required: bool = False
 
     @classmethod
     def load(cls) -> "Settings":
@@ -44,12 +45,15 @@ class Settings:
             "ANOMALY_PERSISTENCE_ENABLED", "false"
         ).strip().lower()
         report_jobs = os.getenv("REPORT_JOBS_ENABLED", "false").strip().lower()
+        redis_required = os.getenv("TWIN_REDIS_REQUIRED", "false").strip().lower()
         if required not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
             raise ValueError("TWIN_INFRA_REQUIRED must be a boolean")
         if anomaly_persistence not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
             raise ValueError("ANOMALY_PERSISTENCE_ENABLED must be a boolean")
         if report_jobs not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
             raise ValueError("REPORT_JOBS_ENABLED must be a boolean")
+        if redis_required not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
+            raise ValueError("TWIN_REDIS_REQUIRED must be a boolean")
         settings = cls(
             bundle_dir=Path(os.getenv("MODEL_BUNDLE_DIR", default)).resolve(),
             session_ttl_seconds=int(os.getenv("SESSION_TTL_SECONDS", "900")),
@@ -73,6 +77,7 @@ class Settings:
             anomaly_persistence_enabled=anomaly_persistence
             in {"1", "true", "yes", "on"},
             report_jobs_enabled=report_jobs in {"1", "true", "yes", "on"},
+            redis_required=redis_required in {"1", "true", "yes", "on"},
         )
         if settings.session_ttl_seconds <= 0:
             raise ValueError("SESSION_TTL_SECONDS must be positive")
