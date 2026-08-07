@@ -62,8 +62,11 @@ def test_migration_job_uses_new_image_and_database_secret() -> None:
     assert "REPLACE_WITH_IMAGE_URI" in manifest
     assert 'command: ["alembic", "upgrade", "head"]' in manifest
     assert "key: DATABASE_URL" in manifest
+    assert "ttlSecondsAfterFinished: 3600" in manifest
     assert "migration-job.yaml" in workflow
-    assert "kubectl wait --for=condition=complete" in workflow
+    assert ".status.succeeded" in workflow
+    assert ".status.failed" in workflow
+    assert "kubectl logs job/" in workflow
 
 
 def test_runtime_image_uses_a_writable_huggingface_cache() -> None:
@@ -73,3 +76,12 @@ def test_runtime_image_uses_a_writable_huggingface_cache() -> None:
     assert "HF_HOME=/app/.cache/huggingface" in dockerfile
     assert "mkdir -p /app/.cache/huggingface" in dockerfile
     assert "chown -R app:app /app/.cache" in dockerfile
+
+
+def test_runtime_image_forces_cpu_only_torch() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "ARG TORCH_VERSION=2.13.0" in dockerfile
+    assert "https://download.pytorch.org/whl/cpu" in dockerfile
+    assert '"torch==${TORCH_VERSION}+cpu"' in dockerfile
+    assert "torch.version.cuda is None" in dockerfile

@@ -5,7 +5,7 @@ metadata:
   namespace: fastapi
 spec:
   backoffLimit: 0
-  ttlSecondsAfterFinished: 300
+  ttlSecondsAfterFinished: 3600
   template:
     spec:
       restartPolicy: Never

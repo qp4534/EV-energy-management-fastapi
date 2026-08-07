@@ -1,4 +1,6 @@
 -r requirements.txt
 
 # AI dependencies for the combined AWS image and the optional chatbot/report image.
+# Docker installs the pinned CPU-only torch wheel before this file. Keep the
+# torch installation in Dockerfile so Linux builds never pull CUDA libraries.
 sentence-transformers>=5.0,<6.0

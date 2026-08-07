@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+ARG TORCH_VERSION=2.13.0
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -18,7 +20,11 @@ RUN addgroup --system app \
     && chown -R app:app /app/.cache
 
 COPY requirements.txt requirements-ai.txt ./
-RUN pip install --no-cache-dir --requirement requirements-ai.txt
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch==${TORCH_VERSION}+cpu" \
+    && pip install --no-cache-dir --requirement requirements-ai.txt \
+    && python -c "import torch; assert torch.version.cuda is None, 'CUDA-enabled torch is not allowed in the CPU image'; print(f'Installed CPU-only torch {torch.__version__}')"
 
 # The same image is used by the API, Alembic migration, and persistence worker.
 # Runtime commands are overridden per service in docker-compose.yml.

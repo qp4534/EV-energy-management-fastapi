@@ -27,6 +27,8 @@ jobs:
         with:
           context: ./ev_ai_inference_api
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
@@ -78,13 +80,30 @@ jobs:
             "export KUBECONFIG=~/.kube/config
              kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true
              printf '%s' '$MIGRATION_MANIFEST_B64' | base64 -d | kubectl apply -f -
-             if ! kubectl wait --for=condition=complete job/'$MIGRATION_JOB' \
-               -n fastapi --timeout=900s; then
-               kubectl logs job/'$MIGRATION_JOB' -n fastapi || true
-               exit 1
-             fi
-             kubectl logs job/'$MIGRATION_JOB' -n fastapi
-             kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true"
+             for attempt in \$(seq 1 180); do
+               if ! kubectl get job '$MIGRATION_JOB' -n fastapi >/dev/null 2>&1; then
+                 echo 'Migration job disappeared before completion.'
+                 exit 1
+               fi
+               succeeded=\$(kubectl get job '$MIGRATION_JOB' -n fastapi -o jsonpath='{.status.succeeded}')
+               failed=\$(kubectl get job '$MIGRATION_JOB' -n fastapi -o jsonpath='{.status.failed}')
+               if [ "\$succeeded" = '1' ]; then
+                 kubectl logs job/'$MIGRATION_JOB' -n fastapi
+                 kubectl delete job '$MIGRATION_JOB' -n fastapi --ignore-not-found=true
+                 exit 0
+               fi
+               if [ -n "\$failed" ] && [ "\$failed" -gt 0 ]; then
+                 echo 'FastAPI database migration failed.'
+                 kubectl logs job/'$MIGRATION_JOB' -n fastapi || true
+                 kubectl describe job '$MIGRATION_JOB' -n fastapi || true
+                 exit 1
+               fi
+               sleep 5
+             done
+             echo 'Timed out waiting for FastAPI database migration.'
+             kubectl logs job/'$MIGRATION_JOB' -n fastapi || true
+             kubectl describe job '$MIGRATION_JOB' -n fastapi || true
+             exit 1"
 
       - name: Checkout GitOps repository
         uses: actions/checkout@v4
