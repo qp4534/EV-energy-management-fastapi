@@ -108,6 +108,12 @@ def _model_request(payload: TwinSampleRequest) -> SampleRequest:
     )
 
 
+def build_model_request(payload: TwinSampleRequest) -> SampleRequest:
+    """Convert a twin sensor payload into the BMS supervisor input."""
+
+    return _model_request(payload)
+
+
 class TwinService:
     def __init__(
         self,

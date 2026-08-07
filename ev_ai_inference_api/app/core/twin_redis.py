@@ -64,6 +64,24 @@ class TwinRedisStore:
             pipe.zrem(RISK_SORTED_SET, frame.vehicle_id)
         await pipe.execute()
 
+    async def publish_live_only(self, frame: TwinFrame) -> None:
+        """Publish a simulated frame without prebuffer/persist storage.
+
+        Simulated vehicles only need the latest snapshot, the live pub/sub
+        channel and the risk sorted set; skipping prebuffer and the persist
+        stream keeps 100+ vehicles replaying at 1 Hz cheap.
+        """
+
+        payload = frame.model_dump_json()
+        pipe = self.redis.pipeline(transaction=True)
+        pipe.set(latest_key(frame.vehicle_id), payload, ex=LATEST_TTL_SECONDS)
+        if frame.final_risk_level >= 1:
+            pipe.zadd(RISK_SORTED_SET, {frame.vehicle_id: frame.final_risk_level})
+        else:
+            pipe.zrem(RISK_SORTED_SET, frame.vehicle_id)
+        pipe.publish(live_channel(frame.vehicle_id), payload)
+        await pipe.execute()
+
     async def seed_latest(self, frame: TwinFrame) -> None:
         """Populate current/risk views without enqueueing already-persisted seed data."""
 
