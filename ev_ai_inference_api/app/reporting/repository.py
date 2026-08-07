@@ -376,6 +376,25 @@ class PostgresReportRepository:
         report_id = uuid5(NAMESPACE_URL, f"ev-ai-report:{job.job_key}")
         report_json = report.model_dump_json(by_alias=True)
         async with self.sessions.begin() as session:
+            if job.job_type == ReportType.ANOMALY and job.anomaly_id is not None:
+                existing_report_id = await session.scalar(
+                    text(
+                        """
+                        SELECT report_id
+                        FROM public."AI_REPORTS"
+                        WHERE anomaly_id = :anomaly_id
+                          AND report_type = :report_type
+                        ORDER BY created_at DESC, report_id
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "anomaly_id": job.anomaly_id,
+                        "report_type": ReportType.ANOMALY.public_value,
+                    },
+                )
+                if existing_report_id is not None:
+                    report_id = UUID(str(existing_report_id))
             await session.execute(
                 text(
                     """
