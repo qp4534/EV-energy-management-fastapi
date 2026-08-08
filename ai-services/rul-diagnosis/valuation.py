@@ -19,6 +19,15 @@
 """
 
 # ------------------------------------------------------------------
+# 가격 산정 근거 출처 — 화면·PDF에 하이퍼링크로 노출한다.
+# ------------------------------------------------------------------
+PRICE_SOURCE_URL = (
+    "https://about.bnef.com/insights/clean-energy/"
+    "battery-pack-prices-fall-to-an-average-of-132-kwh-but-rising-commodity-prices-start-to-bite/"
+)
+PRICE_SOURCE_LABEL = "BloombergNEF 2021 리튬이온 배터리팩 가격조사 ($132/kWh)"
+
+# ------------------------------------------------------------------
 # 국내 시세 기준 단가대 (원/kWh)
 #   하단 = 공공 예정가/침체 시황, 상단 = 2023 낙찰 피크
 # ------------------------------------------------------------------
@@ -63,6 +72,7 @@ BUYERS = [
         "why": "현대차그룹 순환경제 체계로 폐배터리를 수거하고 현대모비스가 재제조합니다. "
                "재제조 가능한 고SOH 팩에 가장 높은 값을 기대할 수 있는 경로입니다.",
         "fact": "현대글로비스 수거 → 현대모비스 재제조 순환경제 시스템 구축",
+        "source_url": "https://www.hyundai.co.kr/story/CONT0000000000143438",
     },
     {
         "name": "지자체 공개입찰 (제주 배터리산업화센터 등)", "emoji": "🏛️", "loc": "제주 등",
@@ -71,6 +81,10 @@ BUYERS = [
         "why": "경쟁입찰이라 시황이 좋으면 예정가의 3~4배까지 형성됩니다. "
                "단, 낙찰가 변동폭이 크고 입찰 일정이 정해져 있습니다.",
         "fact": "니로EV 64kWh 785만원 / 코나EV 64kWh 1,150만원 낙찰 (예정가의 3~4배)",
+        # ⚠️ 위 낙찰 사례 수치는 자료 조사 당시 확보한 값으로, 재확인 가능한 1차 출처 링크를
+        # 찾지 못했다(지어내지 않기 위해 비워둠). 아래 링크는 이 입찰을 관장하는 기관(제주
+        # 전기차배터리산업화센터)의 공식 소개 페이지로, 절차·기관 신뢰성 참고용이다.
+        "source_url": "https://battery.jejutp.or.kr/intro",
     },
     {
         "name": "에너지머티리얼즈 (GS건설 자회사)", "emoji": "🏗️", "loc": "경북 포항",
@@ -79,6 +93,7 @@ BUYERS = [
         "why": "수거·재사용과 블랙파우더 추출(재활용)을 함께 하는 곳이라, 등급이 애매하거나 "
                "혼합 물량이어도 한 곳에서 처리할 수 있습니다.",
         "fact": "리튬이온 배터리 수거·재사용 + 블랙파우더 추출, 연 2만톤 목표",
+        "source_url": "https://dealsite.co.kr/articles/115154",
     },
     # ---------------- 2차사용(ESS)급 ----------------
     {
@@ -88,6 +103,7 @@ BUYERS = [
         "why": "국내 최초 재사용 전담 공장으로, SOH 기반 등급 분류 후 ESS·UPS로 재제조합니다. "
                "본 프로젝트의 '진단 → 등급 → 재사용처' 흐름과 가장 유사한 실제 사례입니다.",
         "fact": "국내 최초 재사용(Reuse) 전담 공장. SOH 기반 등급 분류 후 ESS·UPS 재제조",
+        "source_url": "https://pmgrow.co.kr/about-us/introduction",
     },
     # ---------------- 재활용(소재회수)급 ----------------
     {
@@ -97,6 +113,7 @@ BUYERS = [
         "why": "국내 유일 전·후처리 통합 설비로 처리 규모가 가장 큽니다. "
                "재사용이 어려운 팩의 최종 처분처로 가장 확실합니다.",
         "fact": "국내 유일 전·후처리 통합, 전기차 약 30만대분 처리 규모",
+        "source_url": "https://www.thelec.kr/news/articleView.html?idxno=28326",
     },
     {
         "name": "SK에코플랜트 (SK tes)", "emoji": "🏭", "loc": "경북 경주",
@@ -105,6 +122,7 @@ BUYERS = [
         "why": "니켈·코발트·리튬을 자체 개발 기술로 회수합니다. 대기업 계열이라 "
                "대량·장기 계약 물량에 적합합니다.",
         "fact": "2025년 준공 목표 공장, 자체 개발 4대 기술 적용",
+        "source_url": "https://news.skecoplant.com/sk-ecoplant/13958/",
     },
     {
         "name": "포스코HY클린메탈", "emoji": "🧪", "loc": "전남 여수 율촌산단",
@@ -113,6 +131,7 @@ BUYERS = [
         "why": "포스코·화유코발트·GS 합작사로 블랙파우더 처리 규모가 큽니다. "
                "남부권 물류에 유리합니다.",
         "fact": "포스코+화유코발트+GS 합작, 연 블랙파우더 1.2만톤",
+        "source_url": "https://newsroom.posco.com/kr/%ED%8F%AC%EC%8A%A4%EC%BD%94%ED%99%80%EB%94%A9%EC%8A%A4-%EC%9D%B4%EC%B0%A8%EC%A0%84%EC%A7%80-%EB%A6%AC%EC%82%AC%EC%9D%B4%ED%81%B4%EB%A7%81-%EA%B3%B5%EC%9E%A5-%EC%A4%80%EA%B3%B5/",
     },
     {
         "name": "새빗켐", "emoji": "🔬", "loc": "경북 김천·상주",
@@ -121,6 +140,7 @@ BUYERS = [
         "why": "회수 소재를 전구체 복합액으로 가공해 양극재 업계에 납품합니다. "
                "소재 밸류체인에 직접 연결된 처리사입니다.",
         "fact": "LG화학·한국전구체 등에 납품, 4개 공장 보유",
+        "source_url": "https://www.thebell.co.kr/front/newsview.asp?key=202504231727562280102524",
     },
     {
         "name": "DS단석", "emoji": "🔋", "loc": "전북 군산",
@@ -129,6 +149,7 @@ BUYERS = [
         "why": "납축전지 리사이클 노하우를 리튬으로 확장한 곳입니다. "
                "중규모 물량 처리에 적합합니다.",
         "fact": "납축전지 리사이클 노하우 기반 확장, 연 8천톤 처리",
+        "source_url": "https://www.thebell.co.kr/free/content/ArticleView.asp?key=202404091225487880106988",
     },
     {
         "name": "에스쓰리알 (S3R)", "emoji": "🧯", "loc": "충북 충주",
@@ -137,6 +158,7 @@ BUYERS = [
         "why": "50년 폐기물 재활용 노하우와 자체 R&D센터를 보유한 중견 처리사입니다. "
                "중부권 물류에 유리합니다.",
         "fact": "50년 폐기물 재활용 노하우, R&D센터 보유",
+        "source_url": "https://s3r.co.kr/theme/daontheme_pro02/html/company/08.php",
     },
     {
         "name": "에코프로CnG", "emoji": "🌱", "loc": "—",
@@ -145,6 +167,7 @@ BUYERS = [
         "why": "LG에너지솔루션과 장기 공급계약을 맺은 대형 재활용처로 물량 소화력이 큽니다. "
                "등급과 무관하게 매입됩니다.",
         "fact": "LG에너지솔루션과 2021년부터 4년간 폐배터리 장기공급계약 체결",
+        "source_url": "https://www.etnews.com/20210208000138",
     },
     # ---------------- 수거·매입(중개)급 ----------------
     {
@@ -154,6 +177,7 @@ BUYERS = [
         "why": "정식 허가 수거업체로 전국 출장수거를 합니다. 중간 유통이라 단가는 낮지만, "
                "소량·개별 처분이나 즉시 처리에 가장 간편합니다.",
         "fact": "전기차·ESS·전동공구 배터리 정식 허가 수거업체",
+        "source_url": "https://www.da-factory.co.kr/",
     },
     {
         "name": "GR리사이클", "emoji": "🚚", "loc": "전국 방문수거",
@@ -161,6 +185,7 @@ BUYERS = [
         "band": "collect", "accepts": ["1등급", "2등급", "3등급"],
         "why": "환경부 정식 허가 업체로 전국 방문수거합니다. 소량 처분이나 긴급 처리에 적합합니다.",
         "fact": "환경부 정식 허가, 리튬이온 배터리(전기차·ESS·노트북) 전문",
+        "source_url": "https://www.grrecycle.co.kr/",
     },
 ]
 
@@ -238,6 +263,10 @@ def estimate_offers(grade: str, capacity_kwh: float, condition: float,
                           int(round(total * (1 + spread)))),
             "왜": b["why"], "확인된_사실": b["fact"],
             "단가근거": PRICE_BANDS[band]["basis"],
+            # 근거 하이퍼링크 — 화면/PDF에서 "출처 보기" 링크로 노출한다.
+            "출처_링크": b.get("source_url") or "",
+            "단가출처_링크": PRICE_SOURCE_URL,
+            "단가출처_라벨": PRICE_SOURCE_LABEL,
         })
     out.sort(key=lambda x: x["제안가_원"], reverse=True)
     return out

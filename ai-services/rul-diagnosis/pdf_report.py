@@ -90,7 +90,16 @@ def _styles():
                               textColor=NAVY),
         "note": ParagraphStyle("note", fontName=FONT_R, fontSize=8.3, leading=13,
                                textColor=colors.HexColor("#8A3A1E")),
+        "link": ParagraphStyle("link", fontName=FONT_R, fontSize=8.3, leading=13,
+                               textColor=ACCENT),
     }
+
+
+def _link_html(url: str, label: str) -> str:
+    """reportlab Paragraph 안에서 클릭 가능한 하이퍼링크로 렌더링되는 XML 조각."""
+    if not url:
+        return ""
+    return f' <link href="{url}" color="#00AAD2"><u>{label}</u></link>'
 
 
 def _kv_table(rows, widths, st, header=None):
@@ -127,7 +136,7 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
               rul_cycles: float, health_pct: float, indicators: dict,
               full_life: float, won, seller: str = "배터리 진단 AI 시스템",
               doc_no: str | None = None, eco: dict | None = None,
-              fire_note: str = "") -> bytes:
+              fire_note: str = "", extra_reasons: list[str] | None = None) -> bytes:
     """매도 제안서 PDF 바이트 반환."""
     _register_fonts()
     st = _styles()
@@ -211,7 +220,8 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
         ["공칭 용량", f"{capacity_kwh:g} kWh"],
     ], [28 * mm, CW - 28 * mm], st))
     S.append(Spacer(1, 3 * mm))
-    S.append(Paragraph(f"※ 단가 근거 — {buyer['단가근거']}", st["small"]))
+    price_link = _link_html(buyer.get("단가출처_링크", ""), buyer.get("단가출처_라벨") or "출처 보기")
+    S.append(Paragraph(f"※ 단가 근거 — {buyer['단가근거']}{price_link}", st["small"]))
     if buyer.get("등급제한_적용"):
         S.append(Spacer(1, 1.5 * mm))
         S.append(Paragraph(
@@ -316,12 +326,21 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
         n4, n5 = "3", "4"
 
     # ── 4. 귀사 적합성
-    S.append(KeepTogether([
+    fit_block = [
         Paragraph(f"{n4}. 귀사 적합성", st["sec"]),
         Paragraph(buyer["왜"], st["body"]),
+    ]
+    # extra_reasons — 화면("배터리 매도 제안서" 탭)에 이미 표시된 추가 사유를 그대로
+    # 덧붙인다. 화면·PDF 내용이 어긋나지 않게 하기 위함.
+    for r in (extra_reasons or []):
+        fit_block.append(Spacer(1, 1.5 * mm))
+        fit_block.append(Paragraph(f"·　{r}", st["body"]))
+    buyer_link = _link_html(buyer.get("출처_링크", ""), "출처 보기")
+    fit_block += [
         Spacer(1, 2 * mm),
-        Paragraph(f"확인된 사업 영역 — {buyer['확인된_사실']}", st["small"]),
-    ]))
+        Paragraph(f"확인된 사업 영역 — {buyer['확인된_사실']}{buyer_link}", st["small"]),
+    ]
+    S.append(KeepTogether(fit_block))
     S.append(Spacer(1, 8 * mm))
 
     # ── 5. 유의사항

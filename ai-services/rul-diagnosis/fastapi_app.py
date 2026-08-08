@@ -441,6 +441,16 @@ class PdfFullRequest(BaseModel):
     buyer_index: int = Field(0, ge=0)
     chemistry: str = "NMC811"
     new_price_krw: float | None = None
+    chosen_buyer: dict | None = Field(
+        None, description="화면(\"잔존가치/판매처\" 탭)에서 이미 선택된 매입처를 그대로 "
+                          "쓰고 싶을 때 넘긴다 - buyer_index로 static BUYERS를 다시 찾는 "
+                          "대신, estimate_offers()/discover_buyers()가 반환한 offer 객체를 "
+                          "그대로 전달하면 된다(화면과 PDF의 매입처가 어긋나지 않게 하기 위함, "
+                          "특히 실시간 검색으로 찾은 매입처를 골랐을 때 필요).")
+    reasons: list[str] = Field(
+        default_factory=list, description="화면에 이미 표시된 \"귀사에 적합한 이유\" "
+                                          "추가 문구 - PDF 3번 섹션에 매입처 왜(why) 아래로 "
+                                          "그대로 덧붙여, 화면과 PDF 내용이 같게 한다.")
 
 
 @app.post("/report/pdf/full")
@@ -452,18 +462,23 @@ def report_pdf_full(req: PdfFullRequest):
     indicators = req.indicators.model_dump()
     condition = sum(indicators.values()) / len(indicators)
 
-    offers = VAL.estimate_offers(req.grade, req.capacity_kwh, condition)
-    if not offers:
-        raise HTTPException(422, f"'{req.grade}' 등급을 매입해줄 매입처가 없습니다.")
-    if req.buyer_index >= len(offers):
-        raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
-    chosen = offers[req.buyer_index]
-    # 실시간 검색(Serper)+요약(DeepSeek)으로 매입처 최신 정보를 찾을 수 있으면 정적 문구를
-    # 덮어쓴다. 키는 서버 환경변수(SERPER_API_KEY_NH/DEEPSEEK_API_KEY_NH)로 자동 처리되고,
-    # 없으면 None 반환 -> 정적 문구 폴백.
-    live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
-    if live_fact:
-        chosen = {**chosen, "확인된_사실": live_fact}
+    if req.chosen_buyer:
+        # 화면에서 이미 고른 매입처(실시간 검색 결과 포함)를 그대로 쓴다 - buyer_index로
+        # static BUYERS를 다시 찾지 않는다(검색 매입처는애초에 static 목록에 없음).
+        chosen = req.chosen_buyer
+    else:
+        offers = VAL.estimate_offers(req.grade, req.capacity_kwh, condition)
+        if not offers:
+            raise HTTPException(422, f"'{req.grade}' 등급을 매입해줄 매입처가 없습니다.")
+        if req.buyer_index >= len(offers):
+            raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
+        chosen = offers[req.buyer_index]
+        # 실시간 검색(Serper)+요약(DeepSeek)으로 매입처 최신 정보를 찾을 수 있으면 정적 문구를
+        # 덮어쓴다. 키는 서버 환경변수(SERPER_API_KEY_NH/DEEPSEEK_API_KEY_NH)로 자동 처리되고,
+        # 없으면 None 반환 -> 정적 문구 폴백.
+        live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
+        if live_fact:
+            chosen = {**chosen, "확인된_사실": live_fact}
 
     eco_kwargs = {"chemistry": req.chemistry, "path": chosen["단가대"]}
     if req.new_price_krw is not None:
@@ -473,7 +488,7 @@ def report_pdf_full(req: PdfFullRequest):
     pdf_bytes = PDF.build_pdf(
         buyer=chosen, capacity_kwh=req.capacity_kwh, grade=req.grade,
         rul_cycles=req.rul_cycles, health_pct=req.health_pct, indicators=indicators,
-        full_life=req.full_life, won=VAL.won, eco=eco,
+        full_life=req.full_life, won=VAL.won, eco=eco, extra_reasons=req.reasons,
     )
 
     from urllib.parse import quote

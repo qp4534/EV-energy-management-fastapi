@@ -120,6 +120,9 @@ def discover_buyers(
         )
         if not snippets:
             return None
+        # link_by_title: DeepSeek가 반환한 link 문자열이 실제 검색 결과에 있던 URL인지
+        # 검증하는 용도(할루시네이션 방지) - 검색 결과에 없는 URL을 지어내 돌려주면 버린다.
+        known_links = {s.get("link", "") for s in snippets if s.get("link")}
         context = "\n".join(
             f"- {s.get('title', '')}: {s.get('snippet', '')} ({s.get('link', '')})"
             for s in snippets
@@ -138,7 +141,9 @@ def discover_buyers(
                         '형식: {"companies": [{"name": "회사명", "role": "사업 내용 한 줄", '
                         '"loc": "지역 (모르면 \\"—\\")", "band": "reuse|ess|material|collect 중 하나 '
                         "(reuse=EV 재제조/재사용, ess=2차사용·ESS, material=소재회수·재활용, "
-                        'collect=단순 수거·매입 중개)", "fact": "검색 결과에 실제로 있는 근거 한 줄"}]}. '
+                        'collect=단순 수거·매입 중개)", "fact": "검색 결과에 실제로 있는 근거 한 줄", '
+                        '"link": "이 회사 설명이 나온 검색 결과의 괄호 안 URL을 그대로 복사(지어내지 '
+                        '말고, 모르면 빈 문자열)"}]}. '
                         "검색 결과에서 확인되지 않는 내용은 절대 지어내지 말고, 근거가 빈약한 회사는 "
                         f"목록에서 빼줘. 최대 8곳까지만.\n\n{context}"
                     ),
@@ -162,6 +167,10 @@ def discover_buyers(
             band = (c.get("band") or "").strip()
             if not name or band not in _VALID_BANDS:
                 continue
+            # 검색 결과에 실제로 있던 URL인지 확인 - LLM이 지어낸 링크는 버리고 빈 문자열로 둔다.
+            link = (c.get("link") or "").strip()
+            if link not in known_links:
+                link = ""
             buyers.append({
                 "name": name,
                 "emoji": "🔎",
@@ -171,6 +180,7 @@ def discover_buyers(
                 "accepts": _ACCEPTS_BY_BAND[band],
                 "why": c.get("role") or "실시간 검색으로 확인된 매입처입니다.",
                 "fact": c.get("fact") or "실시간 검색 결과 기반 - 상세 근거는 직접 확인 필요.",
+                "source_url": link,
             })
         return buyers or None
     except Exception:
