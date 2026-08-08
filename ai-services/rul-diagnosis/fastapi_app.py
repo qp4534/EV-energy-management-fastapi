@@ -544,6 +544,27 @@ def report_pdf_from_view(req: PdfFromViewRequest):
     )
 
 
+class BuyerDisclosureRequest(BaseModel):
+    """"잔존가치/판매처" 탭에서 매입처 카드별로 "실시간 검색" 버튼을 눌렀을 때 쓰는 요청.
+    PDF 생성과 무관하게 화면에 바로 표시할 목적 - buyer_lookup.fetch_buyer_disclosure()를
+    그대로 감싸기만 한다."""
+    buyer_name: str
+    serper_api_key_nh: str | None = None
+    deepseek_api_key_nh: str | None = None
+
+
+@app.post("/buyer/disclosure")
+def buyer_disclosure(req: BuyerDisclosureRequest):
+    """매입처가 사용후 배터리를 매입하겠다고 공개적으로 밝힌 근거자료를 검색+요약해 반환.
+    검색 결과가 없거나 키가 없으면 disclosure는 null - 호출부가 기존 정적 문구로 폴백한다."""
+    disclosure = BUYER.fetch_buyer_disclosure(
+        req.buyer_name,
+        serper_api_key=req.serper_api_key_nh,
+        deepseek_api_key=req.deepseek_api_key_nh,
+    )
+    return {"disclosure": disclosure}
+
+
 # ------------------------------------------------------------------
 # 엑셀 일괄 업로드 — 관리자가 여러 배터리 행을 한 번에 올려 파이프라인을 돌린다.
 #   Claude 호출(리포트 작성)은 하지 않는다 — 수백 행을 한 번에 처리할 수 있으므로
