@@ -441,11 +441,6 @@ class PdfFullRequest(BaseModel):
     buyer_index: int = Field(0, ge=0)
     chemistry: str = "NMC811"
     new_price_krw: float | None = None
-    # 매입처 실시간 검색(Serper 검색 + DeepSeek 요약)을 개인 키로 한 번만 돌려보고 싶을 때
-    # 선택 입력. 저장하지 않고 이 요청 처리에만 쓰고 버린다 - 어떤 로그에도 남기지 않는다
-    # (아래 어디에도 print/log 없음).
-    serper_api_key_nh: str | None = None
-    deepseek_api_key_nh: str | None = None
 
 
 @app.post("/report/pdf/full")
@@ -464,14 +459,9 @@ def report_pdf_full(req: PdfFullRequest):
         raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
     chosen = offers[req.buyer_index]
     # 실시간 검색(Serper)+요약(DeepSeek)으로 매입처 최신 정보를 찾을 수 있으면 정적 문구를
-    # 덮어쓴다. 요청에 개인 키가 실려 있으면 그 키로, 없으면 서버 환경변수 키로(그것도
-    # 없으면 None 반환 -> 정적 문구 폴백). 어느 쪽이든 키 값 자체는 fetch_buyer_disclosure
-    # 안에서만 잠깐 쓰이고 리턴되지 않는다.
-    live_fact = BUYER.fetch_buyer_disclosure(
-        chosen["매입처"],
-        serper_api_key=req.serper_api_key_nh,
-        deepseek_api_key=req.deepseek_api_key_nh,
-    )
+    # 덮어쓴다. 키는 서버 환경변수(SERPER_API_KEY_NH/DEEPSEEK_API_KEY_NH)로 자동 처리되고,
+    # 없으면 None 반환 -> 정적 문구 폴백.
+    live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
     if live_fact:
         chosen = {**chosen, "확인된_사실": live_fact}
 
@@ -544,36 +534,14 @@ def report_pdf_from_view(req: PdfFromViewRequest):
     )
 
 
-class BuyerDisclosureRequest(BaseModel):
-    """"잔존가치/판매처" 탭에서 매입처 카드별로 "실시간 검색" 버튼을 눌렀을 때 쓰는 요청.
-    PDF 생성과 무관하게 화면에 바로 표시할 목적 - buyer_lookup.fetch_buyer_disclosure()를
-    그대로 감싸기만 한다."""
-    buyer_name: str
-    serper_api_key_nh: str | None = None
-    deepseek_api_key_nh: str | None = None
-
-
-@app.post("/buyer/disclosure")
-def buyer_disclosure(req: BuyerDisclosureRequest):
-    """매입처가 사용후 배터리를 매입하겠다고 공개적으로 밝힌 근거자료를 검색+요약해 반환.
-    검색 결과가 없거나 키가 없으면 disclosure는 null - 호출부가 기존 정적 문구로 폴백한다."""
-    disclosure = BUYER.fetch_buyer_disclosure(
-        req.buyer_name,
-        serper_api_key=req.serper_api_key_nh,
-        deepseek_api_key=req.deepseek_api_key_nh,
-    )
-    return {"disclosure": disclosure}
-
-
 class LiveOffersRequest(BaseModel):
-    """"잔존가치/판매처" 탭에서 "실시간 검색으로 매입처 확인"을 눌렀을 때 쓰는 요청.
-    회사 자체를 검색으로 찾아서 매입처 목록을 다시 구성하되, 가격은 그대로 기존
-    PRICE_BANDS(BNEF/국내 낙찰가 등 출처가 있는 벤치마크) 계산식으로 산정한다."""
+    """"잔존가치/판매처" 탭 로드 시 매입처 목록을 가져오는 요청. 회사 자체를 검색으로
+    찾아서 매입처 목록을 구성하되, 가격은 그대로 기존 PRICE_BANDS(BNEF/국내 낙찰가 등
+    출처가 있는 벤치마크) 계산식으로 산정한다. Serper/DeepSeek 키는 서버 환경변수
+    (SERPER_API_KEY_NH/DEEPSEEK_API_KEY_NH)로 자동 처리된다."""
     grade: str
     capacity_kwh: float = Field(..., gt=0)
     condition: float = Field(..., ge=0, le=1)
-    serper_api_key_nh: str | None = None
-    deepseek_api_key_nh: str | None = None
 
 
 @app.post("/buyers/live-offers")
@@ -584,10 +552,7 @@ def buyers_live_offers(req: LiveOffersRequest):
     if req.grade not in ("1등급", "2등급", "3등급"):
         raise HTTPException(400, "grade는 '1등급'|'2등급'|'3등급' 중 하나여야 합니다.")
 
-    discovered = BUYER.discover_buyers(
-        serper_api_key=req.serper_api_key_nh,
-        deepseek_api_key=req.deepseek_api_key_nh,
-    )
+    discovered = BUYER.discover_buyers()
     offers = VAL.estimate_offers(
         req.grade, req.capacity_kwh, req.condition, buyers=discovered,
     )
