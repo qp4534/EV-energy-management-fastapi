@@ -21,7 +21,7 @@ def fetch_buyer_disclosure(buyer_name: str, api_key: str | None = None) -> str |
         import anthropic
         client = anthropic.Anthropic(api_key=key)
         resp = client.messages.create(
-            model="claude-opus-4-8",
+            model="claude-sonnet-5",
             max_tokens=300,
             tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}],
             messages=[{

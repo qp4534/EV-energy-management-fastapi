@@ -441,6 +441,9 @@ class PdfFullRequest(BaseModel):
     buyer_index: int = Field(0, ge=0)
     chemistry: str = "NMC811"
     new_price_krw: float | None = None
+    # 매입처 실시간 검색을 개인 키로 한 번만 돌려보고 싶을 때 선택 입력. 저장하지 않고
+    # 이 요청 처리에만 쓰고 버린다 - 어떤 로그에도 남기지 않는다(아래 어디에도 print/log 없음).
+    anthropic_api_key: str | None = None
 
 
 @app.post("/report/pdf/full")
@@ -459,8 +462,10 @@ def report_pdf_full(req: PdfFullRequest):
         raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
     chosen = offers[req.buyer_index]
     # 실시간 검색으로 매입처 최신 정보를 찾을 수 있으면 정적 문구를 덮어쓴다.
-    # 검색 실패/키 없음이면 valuation.py의 기존 정적 "확인된 사실" 문구를 그대로 씀.
-    live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
+    # 요청에 개인 키가 실려 있으면 그 키로, 없으면 서버 환경변수 키로(그것도 없으면 None
+    # 반환 -> 정적 문구 폴백). 어느 쪽이든 키 값 자체는 fetch_buyer_disclosure 안에서만
+    # 잠깐 쓰이고 리턴되지 않는다.
+    live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"], api_key=req.anthropic_api_key)
     if live_fact:
         chosen = {**chosen, "확인된_사실": live_fact}
 
