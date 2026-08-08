@@ -565,6 +565,35 @@ def buyer_disclosure(req: BuyerDisclosureRequest):
     return {"disclosure": disclosure}
 
 
+class LiveOffersRequest(BaseModel):
+    """"잔존가치/판매처" 탭에서 "실시간 검색으로 매입처 확인"을 눌렀을 때 쓰는 요청.
+    회사 자체를 검색으로 찾아서 매입처 목록을 다시 구성하되, 가격은 그대로 기존
+    PRICE_BANDS(BNEF/국내 낙찰가 등 출처가 있는 벤치마크) 계산식으로 산정한다."""
+    grade: str
+    capacity_kwh: float = Field(..., gt=0)
+    condition: float = Field(..., ge=0, le=1)
+    serper_api_key_nh: str | None = None
+    deepseek_api_key_nh: str | None = None
+
+
+@app.post("/buyers/live-offers")
+def buyers_live_offers(req: LiveOffersRequest):
+    """매입처를 실시간 검색으로 찾아서(discover_buyers) 매칭·가격 계산까지 한 번에 돌려준다.
+    검색이 실패하거나 키가 없으면 기존 고정 매입처 목록(valuation.BUYERS)으로 자동
+    폴백한다 - 화면이 절대 빈 목록이 되지 않는다."""
+    if req.grade not in ("1등급", "2등급", "3등급"):
+        raise HTTPException(400, "grade는 '1등급'|'2등급'|'3등급' 중 하나여야 합니다.")
+
+    discovered = BUYER.discover_buyers(
+        serper_api_key=req.serper_api_key_nh,
+        deepseek_api_key=req.deepseek_api_key_nh,
+    )
+    offers = VAL.estimate_offers(
+        req.grade, req.capacity_kwh, req.condition, buyers=discovered,
+    )
+    return {"live": discovered is not None, "offers": offers}
+
+
 # ------------------------------------------------------------------
 # 엑셀 일괄 업로드 — 관리자가 여러 배터리 행을 한 번에 올려 파이프라인을 돌린다.
 #   Claude 호출(리포트 작성)은 하지 않는다 — 수백 행을 한 번에 처리할 수 있으므로

@@ -207,10 +207,16 @@ def _unit_price(band_key: str, condition: float) -> int:
 
 
 def estimate_offers(grade: str, capacity_kwh: float, condition: float,
-                    spread: float = 0.15) -> list[dict]:
-    """진단 등급·용량·상태로 매입처별 예상 제안가를 계산해 높은 순으로 반환."""
+                    spread: float = 0.15, buyers: list[dict] | None = None) -> list[dict]:
+    """진단 등급·용량·상태로 매입처별 예상 제안가를 계산해 높은 순으로 반환.
+
+    buyers를 생략하면 미리 조사해둔 고정 매입처 목록(BUYERS)을 쓴다. buyer_lookup.
+    discover_buyers()로 실시간 검색해 찾은 매입처 목록을 넘기면, 회사만 그걸로 바꾸고
+    가격 계산식(PRICE_BANDS - BNEF/국내 낙찰가 등으로 출처가 있는 벤치마크)은 그대로
+    적용한다 - 가격 자체를 검색으로 지어내지 않기 위함."""
+    buyers = buyers if buyers is not None else BUYERS
     out = []
-    for b in BUYERS:
+    for b in buyers:
         if grade not in b["accepts"]:
             continue
         # 매입처 능력과 배터리 등급 중 낮은 쪽이 실제 용도(=단가대)

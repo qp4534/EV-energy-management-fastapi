@@ -46,13 +46,16 @@ def _summarize_deepseek(buyer_name: str, snippets: list[dict], api_key: str) -> 
             "messages": [{
                 "role": "user",
                 "content": (
-                    f"아래는 '{buyer_name}'을 검색한 결과다. 이 회사의 폐배터리/이차전지 "
-                    f"재사용·재활용 관련 최신 공개 사업 현황을 한국어로 2문장 이내로 요약해줘. "
-                    f"검색 결과에 관련 내용이 없으면 일반적인 사업 영역만 간단히 설명해.\n\n{context}"
+                    f"아래는 '{buyer_name}'을 검색한 결과다. 이 회사가 사용후 배터리(폐배터리/"
+                    f"이차전지 재사용·재활용)를 실제로 매입·수거하겠다고 공개적으로 밝힌 근거"
+                    f"(보도자료, 공시, 뉴스, 사업 공고 등)가 있는지 확인해서 한국어 2문장 이내로 "
+                    f"요약해줘. 반드시 검색 결과에 실제로 있는 내용만 근거로 삼고, 매입 의사를 "
+                    f"밝힌 근거가 검색 결과에 없으면 지어내지 말고 '공개된 자료에서 매입 의사를 "
+                    f"직접 확인하지는 못했다'고 솔직히 말해줘.\n\n{context}"
                 ),
             }],
             "max_tokens": 300,
-            "temperature": 0.3,
+            "temperature": 0.2,
         },
         timeout=15,
     )
@@ -66,15 +69,110 @@ def fetch_buyer_disclosure(
     serper_api_key: str | None = None,
     deepseek_api_key: str | None = None,
 ) -> str | None:
-    """buyer_name 기업의 폐배터리 관련 최신 공개 사업 현황을 검색+요약해 한국어 2문장
-    이내로 돌려준다. 실패하면(키 없음/검색 실패/요약 실패) None."""
+    """buyer_name 기업이 사용후 배터리를 매입하겠다고 밝힌 공개 근거자료(보도자료/공시/뉴스)를
+    검색해 한국어 2문장 이내로 요약해 돌려준다. 실패하면(키 없음/검색 실패/요약 실패) None."""
     s_key = serper_api_key or os.environ.get("SERPER_API_KEY")
     d_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not s_key or not d_key:
         return None
     try:
-        snippets = _search_serper(f"{buyer_name} 폐배터리 이차전지 재사용", s_key)
+        # "재사용" 같은 일반 사업 소개보다 "매입/수거"처럼 실제 구매 의사를 밝힌 자료를
+        # 우선 찾도록 검색어 자체를 구매 의도 중심으로 잡는다.
+        snippets = _search_serper(f"{buyer_name} 사용후 배터리 매입 수거 공고", s_key)
         return _summarize_deepseek(buyer_name, snippets, d_key)
     except Exception:
         # 검색/네트워크/키 문제 등 무엇이든 실패하면 정적 문구 폴백으로 넘어간다.
+        return None
+
+
+# 검색으로 찾은 회사를 valuation.py의 BUYERS 항목과 같은 모양으로 만들 때 쓰는 매핑.
+# band(단가대)별로 그 단가대에서 통상 받아주는 등급 범위 - 회사가 실제로 어떤 등급까지
+# 받는지는 검색으로 알 수 없어서, PRICE_BANDS 위계(수거<재활용<2차사용<재사용)에 맞춰
+# 합리적인 기본값을 쓴다(기존 BUYERS 정적 항목들의 accepts 패턴과 동일).
+_ACCEPTS_BY_BAND = {
+    "reuse": ["1등급", "2등급"],
+    "ess": ["1등급", "2등급"],
+    "material": ["1등급", "2등급", "3등급"],
+    "collect": ["1등급", "2등급", "3등급"],
+}
+_VALID_BANDS = set(_ACCEPTS_BY_BAND)
+
+
+def discover_buyers(
+    serper_api_key: str | None = None,
+    deepseek_api_key: str | None = None,
+    num_results: int = 10,
+) -> list[dict] | None:
+    """국내에서 사용후 배터리를 실제로 매입·수거·재사용·재활용하는 회사를 검색해서
+    valuation.BUYERS와 같은 모양(name/emoji/loc/role/band/accepts/why/fact)의 목록으로
+    돌려준다. 가격 자체는 여기서 만들지 않는다 - estimate_offers()가 이 목록을 받아서
+    기존 PRICE_BANDS(BNEF/국내 낙찰가 등 출처가 있는 벤치마크) 계산식을 그대로 적용한다.
+
+    검색/키/JSON 파싱 중 무엇이든 실패하면 None - 호출부는 반드시 valuation.py의
+    고정 BUYERS 목록으로 폴백해야 한다."""
+    s_key = serper_api_key or os.environ.get("SERPER_API_KEY")
+    d_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY")
+    if not s_key or not d_key:
+        return None
+    try:
+        snippets = _search_serper(
+            "국내 사용후 배터리 매입 수거 재사용 재활용 기업", s_key, num=num_results
+        )
+        if not snippets:
+            return None
+        context = "\n".join(
+            f"- {s.get('title', '')}: {s.get('snippet', '')} ({s.get('link', '')})"
+            for s in snippets
+        )
+        resp = requests.post(
+            DEEPSEEK_URL,
+            headers={"Authorization": f"Bearer {d_key}", "Content-Type": "application/json"},
+            json={
+                "model": "deepseek-chat",
+                "response_format": {"type": "json_object"},
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "아래는 '국내 사용후 배터리 매입/수거/재사용/재활용 기업'을 검색한 결과다. "
+                        "검색 결과에 실제로 등장하는 회사만 뽑아서(지어내지 말 것) JSON으로 정리해줘. "
+                        '형식: {"companies": [{"name": "회사명", "role": "사업 내용 한 줄", '
+                        '"loc": "지역 (모르면 \\"—\\")", "band": "reuse|ess|material|collect 중 하나 '
+                        "(reuse=EV 재제조/재사용, ess=2차사용·ESS, material=소재회수·재활용, "
+                        'collect=단순 수거·매입 중개)", "fact": "검색 결과에 실제로 있는 근거 한 줄"}]}. '
+                        "검색 결과에서 확인되지 않는 내용은 절대 지어내지 말고, 근거가 빈약한 회사는 "
+                        f"목록에서 빼줘. 최대 8곳까지만.\n\n{context}"
+                    ),
+                }],
+                "max_tokens": 1500,
+                "temperature": 0.1,
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
+        import json
+        parsed = json.loads(raw)
+        companies = parsed.get("companies") if isinstance(parsed, dict) else None
+        if not companies:
+            return None
+
+        buyers = []
+        for c in companies:
+            name = (c.get("name") or "").strip()
+            band = (c.get("band") or "").strip()
+            if not name or band not in _VALID_BANDS:
+                continue
+            buyers.append({
+                "name": name,
+                "emoji": "🔎",
+                "loc": c.get("loc") or "—",
+                "role": c.get("role") or "",
+                "band": band,
+                "accepts": _ACCEPTS_BY_BAND[band],
+                "why": c.get("role") or "실시간 검색으로 확인된 매입처입니다.",
+                "fact": c.get("fact") or "실시간 검색 결과 기반 - 상세 근거는 직접 확인 필요.",
+            })
+        return buyers or None
+    except Exception:
+        # 검색/키/JSON 파싱 등 무엇이든 실패하면 고정 BUYERS 목록으로 폴백.
         return None
