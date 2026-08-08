@@ -54,6 +54,52 @@ def _ramp(progress: float, exponent: float = 1.5) -> float:
     return clamped**exponent
 
 
+def _grid_position(index: int) -> tuple[int, int]:
+    """Map cell index to a 6x16 grid position matching the thermal renderer."""
+
+    module = index // 8
+    module_row, module_column = divmod(module, 4)
+    cell = index % 8
+    cell_row, cell_column = divmod(cell, 4)
+    return module_row * 2 + cell_row, module_column * 4 + cell_column
+
+
+def _apply_heat_spread(
+    temperatures: list[int],
+    center: int,
+    base: int,
+    peak: int,
+    *,
+    sigma: float,
+) -> None:
+    center_row, center_column = _grid_position(center)
+    for index in range(CELL_COUNT):
+        row, column = _grid_position(index)
+        distance = math.hypot(row - center_row, column - center_column)
+        factor = math.exp(-(distance * distance) / (2.0 * sigma * sigma))
+        value = base + round((peak - base) * factor)
+        if value > temperatures[index]:
+            temperatures[index] = value
+
+
+def _apply_voltage_spread(
+    voltages: list[int],
+    center: int,
+    base: int,
+    drop: int,
+    *,
+    sigma: float,
+) -> None:
+    center_row, center_column = _grid_position(center)
+    for index in range(CELL_COUNT):
+        row, column = _grid_position(index)
+        distance = math.hypot(row - center_row, column - center_column)
+        factor = math.exp(-(distance * distance) / (2.0 * sigma * sigma))
+        value = base - round(drop * factor)
+        if value < voltages[index]:
+            voltages[index] = value
+
+
 def _base_temperatures(sequence: int, vehicle_number: int) -> list[int]:
     return [
         310 + round(5 * math.sin((sequence + index * 7 + vehicle_number) / 41.0))
@@ -81,6 +127,7 @@ def build_scenario_sample(
     *,
     frame_count: int = SCENARIO_FRAME_COUNT,
     vehicle_number: int = 0,
+    anomaly_plateau: bool = False,
 ) -> TwinSampleRequest:
     """Build one 1 Hz sensor sample for a scenario at a given sequence index."""
 
@@ -91,52 +138,117 @@ def build_scenario_sample(
     voltages = _base_voltages(sequence, vehicle_number)
     connector = _base_connector(sequence)
     pack_current = 90.0
+    # Live 1-hour loops keep the anomaly visible for the whole hour while
+    # still breathing with a slow sinusoidal modulation; history keeps the
+    # progressive "normal -> incident" ramp.
+    wobble = 0.94 + 0.06 * math.sin(sequence / 23.0)
+    intensity = wobble if anomaly_plateau else _ramp(progress)
 
     scenario_id = scenario.scenario_id
     if scenario_id == "connector_local_overheat":
-        intensity = _ramp(progress)
         connector = [
             300 + round(568 * intensity),
             300 + round(431 * intensity),
             300 + round(181 * intensity),
         ]
     elif scenario_id == "battery_over_temp":
-        intensity = _ramp(progress)
-        for index in range(HOTSPOT_MODULE_START, HOTSPOT_MODULE_START + 8):
-            temperatures[index] = 310 + round(540 * intensity)
-            voltages[index] = 3_810 - round(2_400 * intensity)
+        _apply_heat_spread(
+            temperatures,
+            HOTSPOT_CELL_INDEX,
+            310,
+            310 + round(540 * intensity),
+            sigma=1.4,
+        )
+        _apply_voltage_spread(
+            voltages,
+            HOTSPOT_CELL_INDEX,
+            3_810,
+            round(2_400 * intensity),
+            sigma=1.4,
+        )
     elif scenario_id == "thermal_runaway_risk":
-        intensity = _ramp(progress, exponent=1.2)
-        for index in range(40, 72):
-            temperatures[index] = 310 + round(590 * intensity)
-            voltages[index] = 3_810 - round(2_500 * intensity)
+        _apply_heat_spread(
+            temperatures,
+            HOTSPOT_CELL_INDEX,
+            310,
+            310 + round(590 * intensity),
+            sigma=2.2,
+        )
+        _apply_voltage_spread(
+            voltages,
+            HOTSPOT_CELL_INDEX,
+            3_810,
+            round(2_500 * intensity),
+            sigma=2.2,
+        )
     elif scenario_id == "cell_voltage_imbalance":
-        intensity = _ramp(progress)
-        voltages[HOTSPOT_CELL_INDEX] = 3_810 - round(2_000 * intensity)
+        _apply_voltage_spread(
+            voltages,
+            HOTSPOT_CELL_INDEX,
+            3_810,
+            round(2_000 * intensity),
+            sigma=0.8,
+        )
     elif scenario_id == "battery_overheat_sign":
-        intensity = _ramp(progress)
-        for index in range(HOTSPOT_MODULE_START, HOTSPOT_MODULE_START + 8):
-            temperatures[index] = 310 + round(340 * intensity)
+        _apply_heat_spread(
+            temperatures,
+            HOTSPOT_CELL_INDEX,
+            310,
+            310 + round(340 * intensity),
+            sigma=1.4,
+        )
     elif scenario_id == "rapid_temp_rise":
-        late_progress = _ramp(max(0.0, (progress - 0.70) / 0.30))
-        for index in range(HOTSPOT_MODULE_START, HOTSPOT_MODULE_START + 8):
-            temperatures[index] = 310 + round(340 * late_progress)
+        _apply_heat_spread(
+            temperatures,
+            HOTSPOT_CELL_INDEX,
+            310,
+            310 + round(340 * intensity),
+            sigma=1.6,
+        )
     elif scenario_id == "connector_temp_rise":
-        intensity = _ramp(progress)
         connector = [
             300 + round(250 * intensity),
             300 + round(150 * intensity),
             300 + round(80 * intensity),
         ]
     elif scenario_id == "cell_voltage_deviation":
-        intensity = _ramp(progress)
-        voltages[HOTSPOT_CELL_INDEX] = 3_810 - round(1_500 * intensity)
+        _apply_voltage_spread(
+            voltages,
+            HOTSPOT_CELL_INDEX,
+            3_810,
+            round(1_500 * intensity),
+            sigma=0.8,
+        )
     elif scenario_id == "charging_current_fluctuation":
         pack_current = (
             90.0
             + 60.0 * math.sin(sequence / 5.0)
             + 25.0 * math.sin(sequence / 17.0)
         )
+
+    if scenario_id in {
+        "battery_over_temp",
+        "thermal_runaway_risk",
+        "battery_overheat_sign",
+        "rapid_temp_rise",
+        "cell_voltage_imbalance",
+        "cell_voltage_deviation",
+    }:
+        for index in range(CELL_COUNT):
+            fluctuation = (
+                (1.5 + 6.0 * intensity)
+                * math.sin((sequence + index * 7) / 19.0)
+                * (0.6 + 0.4 * math.sin((sequence + index * 3) / 37.0))
+            )
+            temperatures[index] += round(fluctuation)
+    if scenario_id in {
+        "connector_local_overheat",
+        "connector_temp_rise",
+    }:
+        connector = [
+            value + round(4 * math.sin((sequence + component * 17) / 31.0))
+            for component, value in enumerate(connector)
+        ]
 
     return TwinSampleRequest(
         observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -193,6 +305,7 @@ async def generate_scenario_frames(
             scenario,
             index,
             frame_count=frame_count,
+            anomaly_plateau=(frame_count == SCENARIO_FRAME_COUNT),
         ).model_copy(
             update={
                 "observed_at": resolved_start + timedelta(seconds=index),

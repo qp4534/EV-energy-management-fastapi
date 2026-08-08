@@ -6,6 +6,7 @@ import pytest
 
 from app.scenario_catalog import SCENARIO_BY_ID
 from app.scenario_generator import (
+    HISTORY_FRAME_COUNT,
     SCENARIO_FRAME_COUNT,
     build_scenario_sample,
     generate_scenario_frames,
@@ -90,6 +91,85 @@ def test_charging_current_fluctuation_changes_pack_current() -> None:
     currents = {sample.pack_current_a for sample in samples}
     assert len(currents) > 1
     assert max(currents) - min(currents) > 20
+
+
+def test_live_plateau_keeps_anomaly_with_heat_spread() -> None:
+    scenario = SCENARIO_BY_ID["battery_over_temp"]
+    frame = build_scenario_sample(
+        scenario,
+        0,
+        frame_count=SCENARIO_FRAME_COUNT,
+        anomaly_plateau=True,
+    )
+    assert max(frame.temperature_decic) >= 800
+    assert frame.temperature_decic[51] > frame.temperature_decic[30]
+    assert frame.temperature_decic[50] > 400
+
+
+def test_live_plateau_values_are_not_identical() -> None:
+    scenario = SCENARIO_BY_ID["battery_over_temp"]
+    first = build_scenario_sample(
+        scenario,
+        0,
+        frame_count=SCENARIO_FRAME_COUNT,
+        anomaly_plateau=True,
+    )
+    later = build_scenario_sample(
+        scenario,
+        300,
+        frame_count=SCENARIO_FRAME_COUNT,
+        anomaly_plateau=True,
+    )
+    assert sum(first.temperature_decic) != sum(later.temperature_decic)
+
+
+def test_connector_plateau_visible_from_start() -> None:
+    scenario = SCENARIO_BY_ID["connector_local_overheat"]
+    frame = build_scenario_sample(
+        scenario,
+        0,
+        frame_count=SCENARIO_FRAME_COUNT,
+        anomaly_plateau=True,
+    )
+    assert frame.connector_temperature_decic[0] >= 800
+
+
+def test_history_progressive_spreads_heat_to_neighbors() -> None:
+    scenario = SCENARIO_BY_ID["battery_over_temp"]
+    frame = build_scenario_sample(
+        scenario,
+        HISTORY_FRAME_COUNT - 1,
+        frame_count=HISTORY_FRAME_COUNT,
+    )
+    assert max(frame.temperature_decic) >= 800
+    assert frame.temperature_decic[51] > frame.temperature_decic[30]
+    assert frame.temperature_decic[50] > 400
+
+
+def test_thermal_runaway_all_cells_fluctuate() -> None:
+    scenario = SCENARIO_BY_ID["thermal_runaway_risk"]
+    first = build_scenario_sample(
+        scenario,
+        0,
+        frame_count=SCENARIO_FRAME_COUNT,
+        anomaly_plateau=True,
+    )
+    later = build_scenario_sample(
+        scenario,
+        100,
+        frame_count=SCENARIO_FRAME_COUNT,
+        anomaly_plateau=True,
+    )
+    changed_cells = sum(
+        left != right
+        for left, right in zip(
+            first.temperature_decic,
+            later.temperature_decic,
+            strict=True,
+        )
+    )
+    assert changed_cells >= 20
+    assert sum(first.temperature_decic) != sum(later.temperature_decic)
 
 
 @pytest.mark.asyncio
