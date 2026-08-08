@@ -71,8 +71,8 @@ def fetch_buyer_disclosure(
 ) -> str | None:
     """buyer_name 기업이 사용후 배터리를 매입하겠다고 밝힌 공개 근거자료(보도자료/공시/뉴스)를
     검색해 한국어 2문장 이내로 요약해 돌려준다. 실패하면(키 없음/검색 실패/요약 실패) None."""
-    s_key = serper_api_key or os.environ.get("SERPER_API_KEY")
-    d_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY")
+    s_key = serper_api_key or os.environ.get("SERPER_API_KEY_NH")
+    d_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY_NH")
     if not s_key or not d_key:
         return None
     try:
@@ -110,8 +110,8 @@ def discover_buyers(
 
     검색/키/JSON 파싱 중 무엇이든 실패하면 None - 호출부는 반드시 valuation.py의
     고정 BUYERS 목록으로 폴백해야 한다."""
-    s_key = serper_api_key or os.environ.get("SERPER_API_KEY")
-    d_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY")
+    s_key = serper_api_key or os.environ.get("SERPER_API_KEY_NH")
+    d_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY_NH")
     if not s_key or not d_key:
         return None
     try:
