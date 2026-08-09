@@ -1,14 +1,30 @@
 # -*- coding: utf-8 -*-
-"""매도 제안서 PDF 생성 — 완성차 기업 공식문서 스타일
+"""매도 제안서 PDF 생성 — 정부 부처 보도자료 스타일
 
-디자인 기준
-- 상단 네이비 헤더 바 + 문서 식별정보(문서번호/작성일/작성부서)
-- 번호 매긴 조항식 섹션 (1. 제안 가격 / 2. 배터리 상태 진단 / …)
-- 표 헤더 네이비, 본문 흰 배경 + 얇은 회색 괘선
+디자인 기준 (2026-08 개편, 이후 피드백으로 재수정)
+- 상단: "MijungE" 로고 lockup + 헤드라인 타이틀 + 문서정보 표(우측, 담당자 연락처 포함).
+  하늘색 슬로건 바는 "색이 튄다"는 피드백으로 뺐다.
+- 표 헤더: 옅은 회색(#EAEAEA) 배경 + 검정 굵은 글씨 (네이비 배경 대신 - 강조는 폰트로만)
+- 섹션 제목: "1. 2. 3. …" 순수 숫자 목록. 원문자(①②③)는 "동그라미 쓰지 말라"는 피드백으로
+  뺐고, 그 전엔 네이비 박스에 넣은 버전이 "버튼처럼 보인다"는 지적을 받아 이미 뺐었다.
+- 문체: 개조식 명사형 종결("~함"/"~임"), 긴 문장은 짧게 분리, 대시(—) 연결과 화살표(→)
+  대신 마침표/콜론/쉼표. □(대분류)/-(부연, 대시) 불릿 사용 - 처음엔 한글 자모 "ㅇ"를 썼는데
+  일부 폰트에 글리프가 없어 네모로 깨졌고, 대체한 흰 원(○)도 "동그라미 쓰지 말라"는 피드백을
+  받아 최종적으로 대시(-)로 정착했다. 화면에서 넘어오는 자유 목록(extra_reasons 등)은 □/-와
+  헷갈리지 않도록 번호("1. 2. 3.") 목록으로 구분한다.
 - 하단 고정 푸터(문서명·페이지·기밀표시)
-- 한글: 맑은 고딕(Regular/Bold) 임베드
+- 한글: 맑은 고딕(Regular/Bold) 또는 번들 Noto Sans KR 임베드
+
+⚠️ 용어: "사용후 배터리"를 상위 카테고리 명칭으로 쓴다(현대자동차그룹 공식 스토리 페이지 기준 -
+https://www.hyundaimotorgroup.com/ko/story/CONT0000000000143438 - 업계에서도 "사용후 배터리"를
+전체 범주로 쓰고, 그 안에서 재사용/2차사용/재활용으로 세분화하는 게 표준 용어라 이렇게 정했다).
+2026-08 초 한 차례 "재사용 배터리"로 전면 교체했었으나, 이 표준 용례와 맞지 않아 되돌렸다. 단,
+표 안의 등급 명칭("재사용(EV 재제조)급"/"2차사용(ESS)급"/"재활용(소재회수)급")은 세부 분류
+용어라 손대지 않았고, 유의사항의 실제 법령명(「사용후 배터리의 관리 및 산업육성에 관한 법률」)도
+그대로 유지한다.
 """
 import os
+import re
 import io
 from datetime import date
 
@@ -23,17 +39,26 @@ from reportlab.platypus import (BaseDocTemplate, Frame, PageTemplate, Paragraph,
                                 Spacer, Table, TableStyle, KeepTogether)
 
 # ---------------- 브랜드 색상 ----------------
-NAVY = colors.HexColor("#002C5F")      # 기업 시그니처 네이비
+NAVY = colors.HexColor("#002C5F")      # 포인트 색(로고/구분선/강조 숫자 박스 전용 - 배경 채움엔 안 씀)
 NAVY_LT = colors.HexColor("#0B4A8F")
 GRAY_BG = colors.HexColor("#F4F6F8")
+GRAY_HEADER = colors.HexColor("#EAEAEA")  # 표 헤더 배경(정부 보도자료 스타일)
 GRAY_LINE = colors.HexColor("#D5DBE1")
 GRAY_TXT = colors.HexColor("#5A6672")
-ACCENT = colors.HexColor("#00AAD2")
+INK = colors.HexColor("#1A1A1A")          # 표 헤더/헤드라인용 검정에 가까운 잉크색
+# ⚠️ ACCENT(#00AAD2, 하늘색/시안색)는 완전히 제거했다 - 링크·상단 슬로건 바에 쓰였는데
+# "하늘색 싫다"는 피드백을 두 번 받아서 이번엔 코드에서 상수 자체를 뺐다.
+
+# ---------------- 담당자 정보 (헤더 문서정보 표에 노출) ----------------
+CONTACT_NAME = "TK야호팀"
+CONTACT_EMAIL = "tkyaho@mijungev.kro.kr"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 FONT_R, FONT_B = "MalgunGothic", "MalgunGothic-Bold"
 _FONTS_READY = False
+
+_CIRCLED = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥", 7: "⑦"}
 
 
 def _register_fonts():
@@ -72,12 +97,8 @@ def _register_fonts():
 
 def _styles():
     return {
-        "h1": ParagraphStyle("h1", fontName=FONT_B, fontSize=19, leading=25,
-                             textColor=colors.white),
-        "sub": ParagraphStyle("sub", fontName=FONT_R, fontSize=9.5, leading=14,
-                              textColor=colors.HexColor("#B9CBE0")),
-        "sec": ParagraphStyle("sec", fontName=FONT_B, fontSize=12, leading=17,
-                              textColor=NAVY, spaceBefore=2, spaceAfter=6),
+        "sec": ParagraphStyle("sec", fontName=FONT_B, fontSize=12, leading=15,
+                              textColor=INK, spaceBefore=0, spaceAfter=0),
         "body": ParagraphStyle("body", fontName=FONT_R, fontSize=9.5, leading=15,
                                textColor=colors.HexColor("#1E2A35")),
         "small": ParagraphStyle("small", fontName=FONT_R, fontSize=8.3, leading=12.5,
@@ -85,30 +106,31 @@ def _styles():
         "cell": ParagraphStyle("cell", fontName=FONT_R, fontSize=9, leading=13.5,
                                textColor=colors.HexColor("#1E2A35")),
         "cellb": ParagraphStyle("cellb", fontName=FONT_B, fontSize=9, leading=13.5,
-                                textColor=NAVY),
-        "big": ParagraphStyle("big", fontName=FONT_B, fontSize=15, leading=20,
-                              textColor=NAVY),
+                                textColor=INK),
         "note": ParagraphStyle("note", fontName=FONT_R, fontSize=8.3, leading=13,
                                textColor=colors.HexColor("#8A3A1E")),
-        "link": ParagraphStyle("link", fontName=FONT_R, fontSize=8.3, leading=13,
-                               textColor=ACCENT),
     }
 
 
 def _link_html(url: str, label: str) -> str:
-    """reportlab Paragraph 안에서 클릭 가능한 하이퍼링크로 렌더링되는 XML 조각."""
+    """reportlab Paragraph 안에서 클릭 가능한 하이퍼링크로 렌더링되는 XML 조각.
+
+    ⚠️ 예전엔 하늘색(#00AAD2, ACCENT) 밑줄로 버튼처럼 튀어 보였다 - 정부 보도자료·기업
+    공문 톤에는 안 맞아서, 본문과 같은 크기의 진회색 밑줄 텍스트로 낮췄다(색으로 강조하지
+    않고 밑줄만으로 링크임을 표시)."""
     if not url:
         return ""
-    return f' <link href="{url}" color="#00AAD2"><u>{label}</u></link>'
+    return f' <link href="{url}" color="#333333"><u>{label}</u></link>'
 
 
 def _kv_table(rows, widths, st, header=None):
-    """라벨-값 표. header가 있으면 네이비 헤더행 추가."""
+    """라벨-값 표. header가 있으면 옅은 회색 헤더행 추가(정부 보도자료 스타일 - 색 배경 대신
+    회색+검정 굵은 글씨로 강조)."""
     data = []
     if header:
         data.append([Paragraph(f"<b>{h}</b>", ParagraphStyle(
             "th", fontName=FONT_B, fontSize=9, leading=13,
-            textColor=colors.white)) for h in header])
+            textColor=INK)) for h in header])
     for r in rows:
         data.append([Paragraph(str(c), st["cell"]) if i else
                      Paragraph(str(c), st["cellb"]) for i, c in enumerate(r)])
@@ -124,12 +146,174 @@ def _kv_table(rows, widths, st, header=None):
     ]
     start = 0
     if header:
-        style += [("BACKGROUND", (0, 0), (-1, 0), NAVY),
-                  ("LINEBELOW", (0, 0), (-1, 0), 0.6, NAVY)]
+        style += [("BACKGROUND", (0, 0), (-1, 0), GRAY_HEADER),
+                  ("LINEBELOW", (0, 0), (-1, 0), 0.8, INK)]
         start = 1
     style.append(("BACKGROUND", (0, start), (0, -1), GRAY_BG))
     t.setStyle(TableStyle(style))
     return t
+
+
+def _section_title(num: int, title: str, st):
+    """"N. 제목" 형식. 원래 원문자(①②…)를 썼다가 네이비 박스(버튼처럼 보임)로 바꿨었는데,
+    "동그라미 쓰지 말고 숫자로" 피드백을 받아 순수 숫자 목록("1." "2." ...)으로 바꿨다."""
+    return Paragraph(f"{num}.　<b>{title}</b>",
+                     ParagraphStyle("sectitle", parent=st["sec"], spaceAfter=6))
+
+
+def _gov_bullets(items, st):
+    """정부 보도자료 스타일 개조식 불릿. items는 (level, text) 리스트 -
+    level 0='□'(요지), level 1='-'(부연설명, 들여쓰기). 부연설명 표시는 원래 "○"(흰 원)를
+    썼는데 "동그라미 쓰지 말고 숫자로" 피드백을 받아 대시(-)로 바꿨다 - 숫자를 쓰면
+    "1. 2. 3." 목록(extra_reasons 등 별도 번호 목록)과 헷갈릴 수 있어 여기는 대시를 쓴다."""
+    flow = []
+    for level, text in items:
+        if level == 0:
+            style = ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)
+            flow.append(Paragraph(f"□　{text}", style))
+        else:
+            style = ParagraphStyle("gov1", parent=st["small"], leftIndent=5 * mm, spaceAfter=2)
+            flow.append(Paragraph(f"-　{text}", style))
+    return flow
+
+
+def _headline_summary(items, st):
+    """교육부 등 정부 보도자료 1페이지 상단에 오는 "주요 내용" - 표(라벨:값)가 아니라
+    □(요지 문장)/ㅇ(부연) 개조식 서술형 요약. 수신 정보 바로 다음, 문서 맨 위에 위치시켜
+    본문을 읽지 않고도 제안 핵심(누구에게·무엇을·얼마에)이 한눈에 들어오게 한다.
+    items는 _gov_bullets와 같은 (level, text) 리스트."""
+    flow = _gov_bullets(items, st)
+    header = Paragraph("주요 내용", ParagraphStyle(
+        "sumtitle", fontName=FONT_B, fontSize=9, leading=12, textColor=NAVY))
+    wrapper = Table([[header], [flow]], colWidths=[None])
+    wrapper.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 1.1, NAVY),
+        ("TOPPADDING", (0, 0), (-1, 0), 5),
+        ("LEFTPADDING", (0, 0), (-1, 0), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 2),
+        ("TOPPADDING", (0, 1), (-1, 1), 2),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 6),
+        ("LEFTPADDING", (0, 1), (-1, 1), 8),
+        ("RIGHTPADDING", (0, 1), (-1, 1), 8),
+    ]))
+    return wrapper
+
+
+# ⚠️ buyer["왜"]/확인된_사실은 소스가 여러 곳이다 - valuation.py의 정적 BUYERS 목록,
+# buyer_lookup.discover_buyers()의 실시간 검색 결과, buyer_lookup.fetch_buyer_disclosure()의
+# DeepSeek 요약. 앞의 둘은 소스 자체를 개조식(□/ㅇ)으로 쓰도록 고쳤지만, DeepSeek 요약은
+# LLM이 매 요청 새로 생성하는 자연어라 완벽히 통제할 수 없다 - 여기서 최종 방어선으로
+# 한 번 더 다듬는다(완결형 종결어미 -> 명사형, 대시 연결 -> 콜론/마침표).
+_GAEJOSIK_ENDINGS = [
+    (re.compile(r"합니다(?=[.\s]|$)"), "함"),
+    (re.compile(r"됩니다(?=[.\s]|$)"), "됨"),
+    (re.compile(r"입니다(?=[.\s]|$)"), "임"),
+    (re.compile(r"습니다(?=[.\s]|$)"), "음"),
+]
+
+
+def _to_gaejosik(text: str) -> str:
+    """자유 문장을 개조식(명사형 종결)에 가깝게 다듬는 최종 보정 - 문장 구조 자체를
+    바꾸진 못하지만, 흔한 완결형 종결어미와 대시(—) 연결을 정리한다."""
+    if not text:
+        return text
+    t = re.sub(r"\s*—\s*", ": ", text)
+    for pat, repl in _GAEJOSIK_ENDINGS:
+        t = pat.sub(repl, t)
+    return t
+
+
+def _render_freeform_gov(text: str, st):
+    """buyer["왜"] 렌더링 전용. 이미 "□ ...\\nㅇ ..." 개조식으로 줄바꿈되어 있으면(정적
+    BUYERS·discover_buyers 소스가 이렇게 씀) 그 구조를 살려 _gov_bullets와 같은 스타일로
+    나눠 그린다. 그런 구조가 아닌 자유 문장(DeepSeek 실시간 요약 등)이면 _to_gaejosik로
+    한 번 다듬어 한 문단으로 렌더링한다. 반환값은 flowable 리스트."""
+    lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+    if lines and any(ln.startswith(("□", "-", "○")) for ln in lines):
+        flow = []
+        for ln in lines:
+            if ln.startswith("□"):
+                content = ln[1:].strip("　 ")
+                flow.append(Paragraph(f"□　{content}",
+                                      ParagraphStyle("gov0f", parent=st["body"], spaceAfter=2)))
+            elif ln.startswith(("-", "○")):  # "○"는 구버전 소스 데이터 호환용
+                content = ln[1:].strip("　 ")
+                flow.append(Paragraph(f"-　{content}",
+                                      ParagraphStyle("gov1f", parent=st["small"],
+                                                     leftIndent=5 * mm, spaceAfter=2)))
+            else:
+                flow.append(Paragraph(_to_gaejosik(ln), st["body"]))
+        return flow
+    return [Paragraph(_to_gaejosik(text or ""), st["body"])]
+
+
+def _draw_header(canv, PW, PH, ML, MR, HEADER_H, doc_no, today, seller, title_text, subtitle_en):
+    """모든 페이지 상단에 반복되는 헤더 - MijungE 로고 lockup + 헤드라인 + 문서정보 표."""
+    canv.saveState()
+
+    # ⚠️ 예전엔 여기 최상단에 하늘색(ACCENT #00AAD2) 슬로건 바가 있었다 - 정부 보도자료·기업
+    # 공문에는 안 어울리는 색이라 완전히 뺐다(2026-08 재수정).
+
+    # 로고 lockup: "MijungE" + 구분선 + 서브텍스트
+    canv.setFillColor(NAVY)
+    canv.setFont(FONT_B, 15)
+    canv.drawString(ML, PH - 11 * mm, "MijungE")
+    logo_w = canv.stringWidth("MijungE", FONT_B, 15)
+    canv.setStrokeColor(GRAY_LINE)
+    canv.setLineWidth(0.7)
+    canv.line(ML + logo_w + 3 * mm, PH - 13.3 * mm, ML + logo_w + 3 * mm, PH - 8.7 * mm)
+    canv.setFillColor(GRAY_TXT)
+    canv.setFont(FONT_R, 8.3)
+    canv.drawString(ML + logo_w + 6 * mm, PH - 11 * mm, "배터리진단팀")
+
+    # 헤드라인 타이틀 + 영문 서브타이틀
+    canv.setFillColor(INK)
+    canv.setFont(FONT_B, 17)
+    canv.drawString(ML, PH - 22 * mm, title_text)
+    canv.setFillColor(GRAY_TXT)
+    canv.setFont(FONT_R, 8.3)
+    canv.drawString(ML, PH - 27 * mm, subtitle_en)
+
+    # 문서정보 표(우측) - 표 형식(라벨 셀 회색/값 셀 흰색). 담당자 실명·이메일을 별도 행으로
+    # 추가 - 문의 창구가 있는 실제 회사 문서처럼 보이게 하기 위함.
+    info_tbl = Table([
+        ["문서번호", doc_no],
+        ["작성일자", f"{today:%Y-%m-%d}"],
+        ["작 성 자", seller],
+        ["담당자", f"{CONTACT_NAME} ({CONTACT_EMAIL})"],
+    ], colWidths=[20 * mm, 55 * mm], rowHeights=[6.3 * mm] * 4)
+    info_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), GRAY_HEADER),
+        ("BACKGROUND", (1, 0), (1, -1), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, GRAY_LINE),
+        ("FONT", (0, 0), (0, -1), FONT_B, 7.6),
+        ("FONT", (1, 0), (1, -1), FONT_R, 7.6),
+        ("ALIGN", (0, 0), (0, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TEXTCOLOR", (0, 0), (0, -1), INK),
+        ("TEXTCOLOR", (1, 0), (1, -1), INK),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    tw, th = info_tbl.wrapOn(canv, 0, 0)
+    info_tbl.drawOn(canv, PW - MR - tw, PH - 9 * mm - th)
+
+    # 헤더-바디 구분선
+    canv.setStrokeColor(NAVY)
+    canv.setLineWidth(1.1)
+    canv.line(ML, PH - HEADER_H, PW - MR, PH - HEADER_H)
+    canv.restoreState()
+
+
+def _draw_footer(canv, PW, MR, ML, footer_text):
+    canv.saveState()
+    canv.setStrokeColor(GRAY_LINE)
+    canv.setLineWidth(0.5)
+    canv.line(ML, 14 * mm, PW - MR, 14 * mm)
+    canv.setFont(FONT_R, 7.6)
+    canv.setFillColor(GRAY_TXT)
+    canv.drawString(ML, 9.5 * mm, footer_text)
+    canv.drawRightString(PW - MR, 9.5 * mm, f"- {canv.getPageNumber()} -")
+    canv.restoreState()
 
 
 def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
@@ -146,35 +330,12 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
     buf = io.BytesIO()
     PW, PH = A4
     ML, MR = 18 * mm, 18 * mm
-    HEADER_H = 34 * mm
+    HEADER_H = 38 * mm
 
     def page(canv, _doc):
-        canv.saveState()
-        # 상단 네이비 헤더
-        canv.setFillColor(NAVY)
-        canv.rect(0, PH - HEADER_H, PW, HEADER_H, stroke=0, fill=1)
-
-        canv.setFillColor(colors.white)
-        canv.setFont(FONT_B, 17)
-        canv.drawString(ML, PH - 16 * mm, "사용후 배터리 매도 제안서")
-        canv.setFont(FONT_R, 8.6)
-        canv.setFillColor(colors.HexColor("#B9CBE0"))
-        canv.drawString(ML, PH - 22.5 * mm,
-                        "Second-Life EV Battery Sales Proposal")
-        canv.setFont(FONT_R, 8.2)
-        canv.drawRightString(PW - MR, PH - 14 * mm, f"문서번호  {doc_no}")
-        canv.drawRightString(PW - MR, PH - 19 * mm, f"작성일자  {today:%Y-%m-%d}")
-        canv.drawRightString(PW - MR, PH - 24 * mm, f"작 성 자  {seller}")
-
-        # 푸터
-        canv.setStrokeColor(GRAY_LINE)
-        canv.setLineWidth(0.5)
-        canv.line(ML, 14 * mm, PW - MR, 14 * mm)
-        canv.setFont(FONT_R, 7.6)
-        canv.setFillColor(GRAY_TXT)
-        canv.drawString(ML, 9.5 * mm, "사용후 배터리 매도 제안서 · 대외비(Confidential)")
-        canv.drawRightString(PW - MR, 9.5 * mm, f"- {canv.getPageNumber()} -")
-        canv.restoreState()
+        _draw_header(canv, PW, PH, ML, MR, HEADER_H, doc_no, today, seller,
+                     "사용후 배터리 매도 제안서", "Used EV Battery Sales Proposal")
+        _draw_footer(canv, PW, MR, ML, "사용후 배터리 매도 제안서 · 대외비(Confidential) · 문의: tkyaho@mijungev.kro.kr")
 
     doc = BaseDocTemplate(buf, pagesize=A4,
                           leftMargin=ML, rightMargin=MR,
@@ -192,45 +353,53 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
         ["소재지", buyer.get("위치", "—")],
         ["건 명", f"사용후 EV 배터리 팩 {capacity_kwh:g}kWh 매도 제안"],
     ], [28 * mm, CW - 28 * mm], st))
-    S.append(Spacer(1, 9 * mm))
+    S.append(Spacer(1, 6 * mm))
 
-    # ── 1. 제안 가격
+    # ── 주요 내용 요약 (교육부 등 정부 보도자료 1페이지 스타일 - □(대분류)마다 ㅇ 여러 줄인
+    # 실제 보도자료 구조를 따라 매도 개요/AI 진단/제안 가격/매입처 적합성 4개 블록으로 확장)
     lo, hi = buyer["제안가_범위_원"]
-    S.append(Paragraph("1. 제안 가격", st["sec"]))
-    price_tbl = Table([[
-        Paragraph("제안 총액", ParagraphStyle("pl", fontName=FONT_R, fontSize=9,
-                                          textColor=colors.HexColor("#B9CBE0"))),
-        Paragraph(f"<b>{won(buyer['제안가_원'])}</b>",
-                  ParagraphStyle("pv", fontName=FONT_B, fontSize=20, leading=25,
-                                 textColor=colors.white, alignment=TA_RIGHT)),
-    ]], colWidths=[CW * 0.45, CW * 0.55])
-    price_tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 11),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 11),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-    ]))
-    S.append(price_tbl)
-    S.append(Spacer(1, 2 * mm))
+    _why_gist = (buyer["왜"].split("\n")[0].lstrip("□").strip("　 ")
+                if buyer.get("왜") else "")
+    S.append(_headline_summary([
+        (0, f"{buyer['매입처']}에 사용후 배터리 {capacity_kwh:g}kWh 매도 제안"),
+        (1, f"매입처: {buyer['매입처']}({buyer['역할']})"),
+        (1, f"단가대: {buyer['단가대']}"),
+        (0, "AI 진단 결과"),
+        (1, f"판별등급 {grade}, AI 진단 건강도(SOH) {health_pct:.1f}%"),
+        (1, f"예측 잔여수명 {rul_cycles:,.0f}사이클(신품 {full_life:,.0f}사이클 대비 "
+            f"{rul_cycles / full_life * 100:.0f}%)"),
+        (0, "제안 가격"),
+        (1, f"제안총액 {won(buyer['제안가_원'])}, 협의범위 {won(lo)}~{won(hi)}"),
+        (1, f"적용단가 {buyer['단가_원per_kWh']:,}원/kWh"),
+    ] + ([(0, "매입처 적합성"), (1, _why_gist)] if _why_gist else []), st))
+    S.append(Spacer(1, 8 * mm))
+
+    # ── ① 제안 가격
+    S.append(_section_title(1, "제안 가격", st))
+    S.append(Spacer(1, 3 * mm))
+    S.append(Paragraph("제안 총액", ParagraphStyle(
+        "pl", fontName=FONT_R, fontSize=9, textColor=GRAY_TXT)))
+    S.append(Paragraph(f"<b>{won(buyer['제안가_원'])}</b>", ParagraphStyle(
+        "pv", fontName=FONT_B, fontSize=24, leading=29, textColor=NAVY)))
+    S.append(Spacer(1, 3 * mm))
     S.append(_kv_table([
         ["적용 단가", f"{buyer['단가_원per_kWh']:,} 원 / kWh　({buyer['단가대']})"],
         ["협의 범위", f"{won(lo)}　~　{won(hi)}"],
         ["공칭 용량", f"{capacity_kwh:g} kWh"],
     ], [28 * mm, CW - 28 * mm], st))
     S.append(Spacer(1, 3 * mm))
-    price_link = _link_html(buyer.get("단가출처_링크", ""), buyer.get("단가출처_라벨") or "출처 보기")
-    S.append(Paragraph(f"※ 단가 근거 — {buyer['단가근거']}{price_link}", st["small"]))
+    price_link = _link_html(buyer.get("단가출처_링크", ""), buyer.get("단가출처_라벨") or "참고자료")
+    S.append(Paragraph(f"※ 단가 근거: {buyer['단가근거']}{price_link}", st["small"]))
     if buyer.get("등급제한_적용"):
         S.append(Spacer(1, 1.5 * mm))
         S.append(Paragraph(
-            f"※ 귀사는 {buyer['매입처_최고단가대']}까지 취급하시나, 본 배터리의 진단 등급이 "
-            f"'{grade}'이므로 {buyer['단가대']} 단가를 적용하여 제안드립니다.", st["note"]))
+            f"※ 귀사 최고 취급 단가대: {buyer['매입처_최고단가대']}. 본 배터리 진단 등급 "
+            f"'{grade}' 기준 {buyer['단가대']} 단가 적용 제안", st["note"]))
     S.append(Spacer(1, 8 * mm))
 
-    # ── 2. 배터리 상태 진단
-    S.append(Paragraph("2. 배터리 상태 진단 (AI 진단 결과)", st["sec"]))
+    # ── ② 배터리 상태 진단
+    S.append(_section_title(2, "배터리 상태 진단 (AI 진단 결과)", st))
+    S.append(Spacer(1, 3 * mm))
     S.append(_kv_table([
         ["판별 등급", f"<b>{grade}</b>"],
         ["예측 잔여수명", f"<b>{rul_cycles:,.0f} 사이클</b>　(신품 기준 {full_life:,.0f} 사이클)"],
@@ -241,16 +410,21 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
     IND_KO = {"life": "수명 여유", "capacity": "방전 지속력",
               "charge": "충전 건전성", "stability": "전압 안정성"}
     ind_rows = [[IND_KO.get(k, k), f"{v*100:.0f} / 100"] for k, v in indicators.items()]
-    S.append(_kv_table(ind_rows, [CW * 0.5, CW * 0.5], st,
-                       header=["건전성 세부 지표", "점수"]))
+    # KeepTogether - 표가 페이지 경계에서 헤더행과 본문행이 분리되는 걸 방지한다.
+    S.append(KeepTogether(_kv_table(ind_rows, [CW * 0.5, CW * 0.5], st,
+                                    header=["건전성 세부 지표", "점수"])))
     S.append(Spacer(1, 3 * mm))
-    S.append(Paragraph(
-        "진단 방식 — 충·방전 센서값을 RandomForest 회귀·분류 모델로 분석. "
-        "잔여수명 예측 평균오차 ±11 사이클, 등급 판별 정확도 98.4%.", st["small"]))
+    for f in _gov_bullets([
+        (0, "진단 방식: 충·방전 센서값을 RandomForest 회귀·분류 모델로 분석"),
+        (1, "잔여수명 예측 평균오차 ±11 사이클"),
+        (1, "등급 판별 정확도 98.4%"),
+    ], st):
+        S.append(f)
     S.append(Spacer(1, 4 * mm))
 
     # 등급 판정 기준 — SOH(추정 건강도) + 전압 안정성 지표를 함께 보고
     # 매도 경로 상한(재사용/2차사용/재활용)을 정하는 기준을 명시한다.
+    # 정부 보도자료 스타일 □/ㅇ 개조식으로 항목을 잘게 쪼갠다(2026-08 개편).
     # KeepTogether로 묶어 표가 페이지 경계에서 잘리지 않게 한다.
     S.append(KeepTogether([
         Paragraph("등급 판정 기준", st["cellb"]),
@@ -260,43 +434,39 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
             ["SOH 60~80% + 안정성 확보", "2차사용(ESS)급"],
             ["SOH 60% 미만 또는 이상 징후", "재활용(소재회수)급"],
         ], [CW * 0.62, CW * 0.38], st, header=["평가 결과", "판정"]),
-        Spacer(1, 2 * mm),
-        Paragraph(
-            "SOH는 데이터에 없어 등급별 SOH 대역(1등급 80~100%, 2등급 60~80%)에 진단 "
-            "건강도를 매핑해 추정합니다. 3등급(재활용)은 하한을 두지 않았습니다 — 재활용은 "
-            "배터리를 분해·용해해 원재료를 추출하는 공정이라 SOH 성능과 무관하게 처리 가능하며, "
-            "실제 문헌에도 재활용에 성능 하한을 두는 사례가 없습니다. 전압 안정성은 위 건전성 "
-            "세부 지표의 '전압 안정성' 점수를 기준으로 판단합니다.", st["small"]),
-        Spacer(1, 1.5 * mm),
-        Paragraph(
-            "판정 기준 출처 — SOH 60%·80% 컷오프는 이차전지 재사용 업계 자료(ROPLANT: 80~90%"
-            "이상 재제조 / 60~80% 재사용 / 60%미만 재활용)와 한국에너지경제연구원(KESRC) 정책연구"
-            "(완성차 성능보증 통상 70~80%, ESS 재사용 시 초기용량 60%까지 사용 후 폐기 가능)를 "
-            "함께 따랐습니다. ※ 문헌에 따라 '재사용'·'재제조' 명칭이 반대로 쓰이는 경우가 있습니다"
-            "(예: 한국소방안전원(KFPA) 자료는 80% 이상을 '재사용', 65~80%를 '재제조'로 표기) — "
-            "본 제안서는 '차량 재장착이 타 용도 전용보다 더 높은 건강 상태를 요구한다'는 실무 "
-            "논리에 따라 고SOH 구간을 재제조(EV 재장착)급으로 정의했습니다. 정부는 전기차 배터리 "
-            "탈거 전 성능평가를 거쳐 재제조·재사용 가능 배터리를 '순환자원'으로 지정하는 제도를 "
-            "추진 중이며, 본 등급 체계는 이 정책 방향과 연동 가능하도록 설계했습니다.", st["small"]),
-        Spacer(1, 1.5 * mm),
-        Paragraph(
-            "재활용 등급 내 이상징후 취급 — 재활용은 SOH 하한이 없는 대신, 물리적 손상·열폭주 "
-            "전조 같은 안전 이상은 별도로 감지합니다. 본 시스템의 화재 위험 게이트(Agent1, "
-            "fire_risk_model)가 위험을 감지하면 SOH 등급과 무관하게 즉시 폐기·특별취급 대상으로 "
-            "분류하고 후속 등급 판정을 진행하지 않습니다. 실무 문헌은 내부저항(IR) 증가율·셀간 "
-            "전압편차 등 셀 단위 계측을 권장하나, 본 진단은 배터리 팩을 분해하지 않는 비침습 방식을 "
-            "택해 팩 단위 충·방전 센서값을 입력으로 전압 강하 패턴 기반 지표로 안정성을 근사합니다. "
-            "셀 단위 IR·전압편차 계측은 팩 분해 또는 BMS 직접 연동이 필요해 본 진단 범위(비분해 "
-            "검사) 밖의 정밀 진단 항목으로 별도 분류합니다.", st["small"]),
-    ]))
+        Spacer(1, 3 * mm),
+    ] + _gov_bullets([
+        (0, "SOH 대역 매핑"),
+        (1, "SOH는 데이터에 없어 등급별 SOH 대역(1등급 80~100%, 2등급 60~80%)에 진단 건강도 매핑"),
+        (1, "3등급(재활용)은 하한 없음: 배터리 분해·용해로 원재료 추출하는 공정, SOH 성능과 무관하게 처리 가능"),
+        (1, "실제 문헌에도 재활용에 성능 하한을 두는 사례 없음"),
+        (1, "전압 안정성은 건전성 세부 지표의 '전압 안정성' 점수 기준 판단"),
+    ], st) + [Spacer(1, 2 * mm)] + _gov_bullets([
+        (0, "판정 기준 출처"),
+        (1, "SOH 60%·80% 컷오프: 이차전지 재사용 업계 자료(ROPLANT) 및 한국에너지경제연구원(KESRC) 정책연구"),
+        (1, "ROPLANT 기준: 80~90% 이상 재제조, 60~80% 재사용, 60% 미만 재활용"),
+        (1, "KESRC 기준: 완성차 성능보증 통상 70~80%, ESS 재사용 시 초기용량 60%까지 사용 후 폐기 가능"),
+        (1, "※ 문헌별 명칭 상이 사례: 한국소방안전원(KFPA)은 80% 이상 '재사용', 65~80% '재제조'로 표기"),
+        (1, "본 제안서는 고SOH 구간을 재제조(EV 재장착)급으로 정의(근거: 차량 재장착은 타 용도 전용보다 높은 건강 상태 요구)"),
+        (1, "정부는 탈거 전 성능평가 거쳐 재제조·재사용 가능 배터리를 순환자원으로 지정하는 제도 추진 중"),
+        (1, "본 등급 체계는 위 정책 방향과 연동 가능하도록 설계"),
+    ], st) + [Spacer(1, 2 * mm)] + _gov_bullets([
+        (0, "재활용 등급 내 이상징후 취급"),
+        (1, "재활용은 SOH 하한 없음. 단, 물리적 손상·열폭주 전조 등 안전 이상은 별도 감지"),
+        (1, "화재 위험 게이트(Agent1, fire_risk_model) 위험 감지 시 SOH 등급 무관 즉시 폐기·특별취급 대상 분류(후속 등급 판정 미진행)"),
+        (1, "실무 문헌은 셀 단위 계측(내부저항 증가율·셀간 전압편차) 권장"),
+        (1, "본 진단은 비침습 방식: 팩 단위 충·방전 센서값 기반 전압 강하 패턴 지표 사용"),
+        (1, "셀 단위 IR·전압편차 계측은 팩 분해 또는 BMS 직접 연동 필요(본 진단 범위인 비분해 검사 밖의 정밀 진단 항목으로 별도 분류)"),
+    ], st)))
     if fire_note:
         S.append(Spacer(1, 2 * mm))
-        S.append(Paragraph(f"안전성 — {fire_note}", st["body"]))
+        S.append(Paragraph(f"안전성: {fire_note}", st["body"]))
     S.append(Spacer(1, 8 * mm))
 
-    # ── 3. 경제성·환경 효과 (선택)
+    # ── ③ 경제성·환경 효과 (선택)
     if eco:
-        S.append(Paragraph("3. 경제성 · 환경 효과", st["sec"]))
+        S.append(_section_title(3, "경제성 · 환경 효과", st))
+        S.append(Spacer(1, 3 * mm))
         # 신품 대체가 성립하는 경로(재사용·2차사용)에서만 절감액을 제시한다
         if eco.get("절감_적용", True):
             _cost_rows = [
@@ -305,10 +475,10 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
                 ["신품 등가 비용", won(eco["신품등가비용_원"])],
             ]
         else:
-            _cost_rows = [["신품 대비 절감", "해당 없음 — " + eco.get("절감_미적용사유", "")]]
+            _cost_rows = [["신품 대비 절감", "해당 없음: " + eco.get("절감_미적용사유", "")]]
         # 3등급(재활용)은 '실사용 kWh'도 SOH 하한 없는 값에서 파생된 수치라
         # 같이 감춘다 — 애초에 재활용 CO2 계산에도 이 값을 쓰지 않는다(용량 무관 20% 고정).
-        _soh_cell = ("60% 미만　(재활용은 용량 무관 처리 — 실사용 kWh 산정 불필요)"
+        _soh_cell = ("60% 미만　(재활용은 용량 무관 처리: 실사용 kWh 산정 불필요)"
                     if eco.get("SOH_하한_근거없음")
                     else f"{eco['추정_SOH_퍼센트']} %　(실사용 {eco['실사용_kWh']} kWh)")
         S.append(_kv_table(_cost_rows + [
@@ -322,61 +492,82 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
         ], [32 * mm, CW - 32 * mm], st))
         S.append(Spacer(1, 3 * mm))
         S.append(Paragraph(
-            "탄소 계수 — 제조 탄소발자국 Nature Communications(2024), "
-            "재제조 공정 배출 3% iScience(2023) 적용.", st["small"]))
+            "탄소 계수: 제조 탄소발자국 Nature Communications(2024), "
+            "재제조 공정 배출 3% iScience(2023) 적용", st["small"]))
         S.append(Spacer(1, 8 * mm))
-        n4, n5 = "4", "5"
+        n4, n5 = 4, 5
     else:
-        n4, n5 = "3", "4"
+        n4, n5 = 3, 4
 
-    # ── 4. 귀사 적합성
+    # ── 귀사 적합성
     fit_block = [
-        Paragraph(f"{n4}. 귀사 적합성", st["sec"]),
-        Paragraph(buyer["왜"], st["body"]),
-    ]
+        _section_title(n4, "귀사 적합성", st),
+        Spacer(1, 3 * mm),
+    ] + _render_freeform_gov(buyer["왜"], st)
     # extra_reasons — 화면("배터리 매도 제안서" 탭)에 이미 표시된 추가 사유를 그대로
-    # 덧붙인다. 화면·PDF 내용이 어긋나지 않게 하기 위함.
-    for r in (extra_reasons or []):
+    # 덧붙인다. 화면·PDF 내용이 어긋나지 않게 하기 위함. buyer["왜"]의 □/○ 불릿과 헷갈리지
+    # 않도록 번호("1. 2. 3.") 목록으로 구분하고, st["small"]로 폰트 크기를 나머지 개조식
+    # 텍스트와 맞춘다(예전엔 st["body"]라 더 크게 나와 폰트가 안 맞아 보였다). _to_gaejosik로
+    # 완결형 종결어미·대시도 한 번 더 정리한다.
+    for i, r in enumerate(extra_reasons or [], start=1):
         fit_block.append(Spacer(1, 1.5 * mm))
-        fit_block.append(Paragraph(f"·　{r}", st["body"]))
-    buyer_link = _link_html(buyer.get("출처_링크", ""), "출처 보기")
+        fit_block.append(Paragraph(f"{i}. {_to_gaejosik(r)}",
+                                   ParagraphStyle("numfit", parent=st["small"], leftIndent=5 * mm)))
+    buyer_link = _link_html(buyer.get("출처_링크", ""), "참고자료")
     fit_block += [
         Spacer(1, 2 * mm),
-        Paragraph(f"확인된 사업 영역 — {buyer['확인된_사실']}{buyer_link}", st["small"]),
+        Paragraph(f"확인된 사업 영역: {_to_gaejosik(buyer['확인된_사실'])}{buyer_link}", st["small"]),
     ]
     S.append(KeepTogether(fit_block))
     S.append(Spacer(1, 8 * mm))
 
-    # ── 5. 유의사항
+    # ── 유의사항
     # ⚠️ 이전엔 "『사용후배터리 산업 육성법』(2025.10 시행)"이라고 적혀 있었는데 사실과 달랐다 -
     # 이 법(사용후 배터리의 관리 및 산업육성에 관한 법률)은 2026.5.26 공포, 2027.5.27 시행
     # "예정"이라 아직 시행 전이다(웹서치로 뉴스 보도 확인). 실제로 지금 적용되는 근거는
     # 「자원순환기본법」상 순환자원 지정 고시(전기차 폐배터리는 폐기물관리법 규제 면제 대상이지만
     # 준수사항이 있음)와, 수출 시 「폐기물의 국가 간 이동 및 그 처리에 관한 법률」(바젤협약 국내
     # 이행법)이다 - 실제 회사에 제출하는 문서라 법령 인용은 정확해야 해서 전부 다시 검증했다.
-    S.append(Paragraph(f"{n5}. 유의사항", st["sec"]))
-    for txt, link_url, link_label in [
-        ("본 제안가는 공개 실거래·시장 벤치마크에 AI 진단 결과를 결합하여 산정한 추정치이며, "
-         "귀사가 제시한 견적이 아닙니다.", "", ""),
-        ("최종 가격은 실물 검사(외관·전기적 검사) 및 시황에 따라 조정될 수 있습니다.", "", ""),
-        ("전기차 사용후 배터리는 「자원순환기본법」에 따른 순환자원 지정 고시 대상으로 폐기물관리법 "
-         "규제가 면제되나, 단순 수리·수선·건조·세척을 통한 재사용 등 일반적·품목별 준수사항을 "
-         "충족해야 하며, 미충족 시 폐기물처리업 허가 대상이 될 수 있습니다.",
-         "https://www.korea.kr/news/policyNewsView.do?newsId=148905610", "정책브리핑(정부) 자료"),
-        ("「사용후 배터리의 관리 및 산업육성에 관한 법률」이 2026.5.26 공포되어 2027.5.27 시행 "
-         "예정입니다(아직 시행 전). 시행 이후에는 탈거 전 성능평가·등급분류 및 전주기 이력·거래"
-         "시스템 등록이 의무화될 예정이므로 사전 대비가 필요합니다.",
-         "https://zdnet.co.kr/view/?no=20260520090026", "관련 보도"),
-        ("해외 매입처에 매각(수출)하는 경우 「폐기물의 국가 간 이동 및 그 처리에 관한 법률」(바젤"
-         "협약 국내 이행법)에 따른 사전통보·승인 절차를 별도로 거쳐야 합니다.", "", ""),
-    ]:
-        link = _link_html(link_url, link_label) if link_url else ""
-        S.append(Paragraph(f"·　{txt}{link}", st["small"]))
-        S.append(Spacer(1, 1.5 * mm))
+    # (아래 두 번째 항목의 「사용후 배터리의 관리 및 산업육성에 관한 법률」은 실제 법률 제목이라
+    # 용어 통일 대상에서 제외 - "사용후"를 "재사용"으로 바꾸면 법령명을 오인용하게 된다.)
+    S.append(_section_title(n5, "유의사항", st))
+    S.append(Spacer(1, 3 * mm))
+
+    def _gov_link(text, url, label):
+        link = _link_html(url, label) if url else ""
+        return Paragraph(f"-　{text}{link}",
+                         ParagraphStyle("gov1link", parent=st["small"], leftIndent=5 * mm, spaceAfter=2))
+
+    S.append(Paragraph("□　본 제안가 산정 근거", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov_link("공개 실거래·시장 벤치마크 + AI 진단 결과 결합 추정치", "", ""))
+    S.append(_gov_link("귀사가 제시한 견적 아님", "", ""))
+    S.append(Spacer(1, 2 * mm))
+
+    S.append(Paragraph("□　가격 조정 가능성", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov_link("최종 가격은 실물 검사(외관·전기적 검사) 및 시황에 따라 조정 가능", "", ""))
+    S.append(Spacer(1, 2 * mm))
+
+    S.append(Paragraph("□　「자원순환기본법」 순환자원 지정 고시 대상", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov_link("전기차 사용후 배터리: 폐기물관리법 규제 면제",
+                       "https://www.korea.kr/news/policyNewsView.do?newsId=148905610", "정책브리핑(정부) 자료"))
+    S.append(_gov_link("단, 단순 수리·수선·건조·세척 등 일반적·품목별 준수사항 충족 필요", "", ""))
+    S.append(_gov_link("미충족 시 폐기물처리업 허가 대상 가능", "", ""))
+    S.append(Spacer(1, 2 * mm))
+
+    S.append(Paragraph("□　「사용후 배터리의 관리 및 산업육성에 관한 법률」 제정", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov_link("2026.5.26 공포, 2027.5.27 시행 예정(아직 시행 전)",
+                       "https://zdnet.co.kr/view/?no=20260520090026", "관련 보도"))
+    S.append(_gov_link("시행 후 탈거 전 성능평가·등급분류 및 전주기 이력·거래시스템 등록 의무화 예정", "", ""))
+    S.append(_gov_link("사전 대비 필요", "", ""))
+    S.append(Spacer(1, 2 * mm))
+
+    S.append(Paragraph("□　해외 매입처 매도(수출) 시 유의", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov_link("「폐기물의 국가 간 이동 및 그 처리에 관한 법률」(바젤협약 국내 이행법) 적용", "", ""))
+    S.append(_gov_link("사전통보·승인 절차 별도 이행 필요", "", ""))
 
     # ── 서명란
     S.append(Spacer(1, 10 * mm))
-    sign = Table([["제 안 자", seller, "( 인 )"]],
+    sign = Table([["제 안 자", CONTACT_NAME, "( 인 )"]],
                  colWidths=[26 * mm, CW - 26 * mm - 26 * mm, 26 * mm])
     sign.setStyle(TableStyle([
         ("FONT", (0, 0), (0, 0), FONT_B, 9.5),
@@ -393,7 +584,8 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
     return buf.getvalue()
 
 
-def build_pdf_from_view(*, buyer_name: str, buyer_role: str = "", buyer_location: str = "",
+def build_pdf_from_view(*, buyer_name: str = "매입 희망 기업", buyer_role: str = "",
+                        buyer_location: str = "",
                         price_total_manwon, unit_price_won, negotiation_range: str,
                         price_grade_label: str, price_note: str = "",
                         grade: str, remaining_cycle, new_cycle,
@@ -421,32 +613,12 @@ def build_pdf_from_view(*, buyer_name: str, buyer_role: str = "", buyer_location
     buf = io.BytesIO()
     PW, PH = A4
     ML, MR = 18 * mm, 18 * mm
-    HEADER_H = 34 * mm
+    HEADER_H = 38 * mm
 
     def page(canv, _doc):
-        canv.saveState()
-        canv.setFillColor(NAVY)
-        canv.rect(0, PH - HEADER_H, PW, HEADER_H, stroke=0, fill=1)
-
-        canv.setFillColor(colors.white)
-        canv.setFont(FONT_B, 17)
-        canv.drawString(ML, PH - 16 * mm, "사용후 배터리 매도 제안서")
-        canv.setFont(FONT_R, 8.6)
-        canv.setFillColor(colors.HexColor("#B9CBE0"))
-        canv.drawString(ML, PH - 22.5 * mm, "Second-Life EV Battery Sales Proposal")
-        canv.setFont(FONT_R, 8.2)
-        canv.drawRightString(PW - MR, PH - 14 * mm, f"문서번호  {doc_no}")
-        canv.drawRightString(PW - MR, PH - 19 * mm, f"작성일자  {today:%Y-%m-%d}")
-        canv.drawRightString(PW - MR, PH - 24 * mm, f"작 성 자  {seller}")
-
-        canv.setStrokeColor(GRAY_LINE)
-        canv.setLineWidth(0.5)
-        canv.line(ML, 14 * mm, PW - MR, 14 * mm)
-        canv.setFont(FONT_R, 7.6)
-        canv.setFillColor(GRAY_TXT)
-        canv.drawString(ML, 9.5 * mm, "사용후 배터리 매도 제안서 · 대외비(Confidential)")
-        canv.drawRightString(PW - MR, 9.5 * mm, f"- {canv.getPageNumber()} -")
-        canv.restoreState()
+        _draw_header(canv, PW, PH, ML, MR, HEADER_H, doc_no, today, seller,
+                     "사용후 배터리 매도 제안서", "Used EV Battery Sales Proposal")
+        _draw_footer(canv, PW, MR, ML, "사용후 배터리 매도 제안서 · 대외비(Confidential) · 문의: tkyaho@mijungev.kro.kr")
 
     doc = BaseDocTemplate(buf, pagesize=A4,
                           leftMargin=ML, rightMargin=MR,
@@ -462,26 +634,32 @@ def build_pdf_from_view(*, buyer_name: str, buyer_role: str = "", buyer_location
         ["수 신", f"<b>{buyer_name}</b>" + (f"  ({buyer_role})" if buyer_role else "")],
         ["소재지", buyer_location or "—"],
     ], [28 * mm, CW - 28 * mm], st))
-    S.append(Spacer(1, 9 * mm))
+    S.append(Spacer(1, 6 * mm))
 
-    S.append(Paragraph("1. 제안 가격", st["sec"]))
-    price_tbl = Table([[
-        Paragraph("제안 총액", ParagraphStyle("pl", fontName=FONT_R, fontSize=9,
-                                          textColor=colors.HexColor("#B9CBE0"))),
-        Paragraph(f"<b>{price_total_manwon:,.0f}만원</b>",
-                  ParagraphStyle("pv", fontName=FONT_B, fontSize=20, leading=25,
-                                 textColor=colors.white, alignment=TA_RIGHT)),
-    ]], colWidths=[CW * 0.45, CW * 0.55])
-    price_tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 11),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 11),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-    ]))
-    S.append(price_tbl)
-    S.append(Spacer(1, 2 * mm))
+    # ── 주요 내용 요약 (교육부 등 정부 보도자료 1페이지 스타일 - □(대분류)마다 ㅇ 여러 줄인
+    # 실제 보도자료 구조를 따라 매도 개요/AI 진단/제안 가격/귀사 적합성 4개 블록으로 확장)
+    _reasons_gist = (reasons[0].split("\n")[0].lstrip("□○-").strip("　 ")
+                    if reasons else "")
+    S.append(_headline_summary([
+        (0, f"{buyer_name}에 사용후 배터리 매도 제안"),
+        (1, f"매입처: {buyer_name}" + (f"({buyer_role})" if buyer_role else "")),
+        (0, "AI 진단 결과"),
+        (1, f"판별등급 {grade}, AI 진단 건강도(SOH) {health_score_pct:.1f}%"),
+        (1, f"예측 잔여수명 {remaining_cycle:,.0f}사이클(신품 {new_cycle:,.0f}사이클 대비 "
+            f"{remaining_cycle / new_cycle * 100:.0f}%)"),
+        (0, "제안 가격"),
+        (1, f"제안총액 {price_total_manwon:,.0f}만원, 협의범위 {negotiation_range}"),
+        (1, f"적용단가 {unit_price_won:,.0f}원/kWh({price_grade_label})"),
+    ] + ([(0, "귀사 적합성"), (1, _reasons_gist)] if _reasons_gist else []), st))
+    S.append(Spacer(1, 8 * mm))
+
+    S.append(_section_title(1, "제안 가격", st))
+    S.append(Spacer(1, 3 * mm))
+    S.append(Paragraph("제안 총액", ParagraphStyle(
+        "pl", fontName=FONT_R, fontSize=9, textColor=GRAY_TXT)))
+    S.append(Paragraph(f"<b>{price_total_manwon:,.0f}만원</b>", ParagraphStyle(
+        "pv", fontName=FONT_B, fontSize=24, leading=29, textColor=NAVY)))
+    S.append(Spacer(1, 3 * mm))
     S.append(_kv_table([
         ["적용 단가", f"{unit_price_won:,.0f} 원 / kWh　({price_grade_label})"],
         ["협의 범위", negotiation_range],
@@ -491,7 +669,8 @@ def build_pdf_from_view(*, buyer_name: str, buyer_role: str = "", buyer_location
         S.append(Paragraph(f"※ {price_note}", st["small"]))
     S.append(Spacer(1, 8 * mm))
 
-    S.append(Paragraph("2. 배터리 상태 진단 (AI 진단 결과)", st["sec"]))
+    S.append(_section_title(2, "배터리 상태 진단 (AI 진단 결과)", st))
+    S.append(Spacer(1, 3 * mm))
     S.append(_kv_table([
         ["판별 등급", f"<b>{grade}</b>"],
         ["예측 잔여수명", f"<b>{remaining_cycle:,.0f}</b> 사이클　(신품 기준 {new_cycle:,.0f} 사이클)"],
@@ -500,28 +679,35 @@ def build_pdf_from_view(*, buyer_name: str, buyer_role: str = "", buyer_location
     S.append(Spacer(1, 4 * mm))
 
     if health_metrics:
-        S.append(_kv_table(
+        S.append(KeepTogether(_kv_table(
             [[m.get("label", ""), m.get("score", "")] for m in health_metrics],
-            [CW * 0.5, CW * 0.5], st, header=["건전성 세부 지표", "점수"]))
+            [CW * 0.5, CW * 0.5], st, header=["건전성 세부 지표", "점수"])))
         S.append(Spacer(1, 3 * mm))
     if diagnosis_note:
         S.append(Paragraph(diagnosis_note, st["small"]))
     S.append(Spacer(1, 8 * mm))
 
+    # reasons/cautions는 build_pdf()의 extra_reasons와 동일하게 번호("1. 2. 3.") 목록 +
+    # st["small"] 폰트 + _to_gaejosik 보정을 적용한다(두 함수 렌더링 스타일 통일).
     if reasons:
-        S.append(Paragraph("3. 귀사에 적합한 이유", st["sec"]))
-        for r in reasons:
-            S.append(Paragraph(r, st["body"]))
-        S.append(Spacer(1, 8 * mm))
+        S.append(_section_title(3, "귀사에 적합한 이유", st))
+        S.append(Spacer(1, 3 * mm))
+        for i, r in enumerate(reasons, start=1):
+            S.append(Paragraph(f"{i}. {_to_gaejosik(r)}",
+                               ParagraphStyle("numfv", parent=st["small"], leftIndent=5 * mm)))
+            S.append(Spacer(1, 1.5 * mm))
+        S.append(Spacer(1, 6.5 * mm))
 
     if cautions:
-        S.append(Paragraph("4. 유의사항", st["sec"]))
-        for c in cautions:
-            S.append(Paragraph(f"·　{c}", st["small"]))
+        S.append(_section_title(4, "유의사항", st))
+        S.append(Spacer(1, 3 * mm))
+        for i, c in enumerate(cautions, start=1):
+            S.append(Paragraph(f"{i}. {_to_gaejosik(c)}",
+                               ParagraphStyle("numcv", parent=st["small"], leftIndent=5 * mm)))
             S.append(Spacer(1, 1.5 * mm))
 
     S.append(Spacer(1, 10 * mm))
-    sign = Table([["제 안 자", seller, "( 인 )"]],
+    sign = Table([["제 안 자", CONTACT_NAME, "( 인 )"]],
                  colWidths=[26 * mm, CW - 26 * mm - 26 * mm, 26 * mm])
     sign.setStyle(TableStyle([
         ("FONT", (0, 0), (0, 0), FONT_B, 9.5),

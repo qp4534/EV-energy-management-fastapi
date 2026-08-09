@@ -473,12 +473,17 @@ def report_pdf_full(req: PdfFullRequest):
         if req.buyer_index >= len(offers):
             raise HTTPException(400, f"buyer_index가 범위를 벗어났습니다. 매입처는 {len(offers)}곳입니다.")
         chosen = offers[req.buyer_index]
-        # 실시간 검색(Serper)+요약(DeepSeek)으로 매입처 최신 정보를 찾을 수 있으면 정적 문구를
-        # 덮어쓴다. 키는 서버 환경변수(SERPER_API_KEY_NH/DEEPSEEK_API_KEY_NH)로 자동 처리되고,
-        # 없으면 None 반환 -> 정적 문구 폴백.
-        live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
-        if live_fact:
-            chosen = {**chosen, "확인된_사실": live_fact}
+
+    # 실시간 검색(Serper)+요약(DeepSeek)으로 매입처 최신 정보를 찾을 수 있으면 "확인된 사업
+    # 영역"뿐 아니라 "귀사 적합성"(section 4, buyer["왜"])도 이 실제 근거로 덮어쓴다 - 정적
+    # 문구/검색 요약 role 한 줄보다 신뢰도가 높다. 같은 호출 결과를 두 필드에 재사용해서
+    # DeepSeek을 두 번 부르지 않는다(비용 절감). chosen_buyer 경로(화면에서 이미 실시간
+    # 검색으로 고른 매입처)에도 똑같이 적용 - discover_buyers()의 "왜"는 role 한 줄짜리라
+    # 이걸로 더 근거 있는 문장으로 보강한다. 키가 없거나 검색/요약이 실패하면 None ->
+    # 기존 문구 그대로 폴백.
+    live_fact = BUYER.fetch_buyer_disclosure(chosen["매입처"])
+    if live_fact:
+        chosen = {**chosen, "확인된_사실": live_fact, "왜": live_fact}
 
     eco_kwargs = {"chemistry": req.chemistry, "path": chosen["단가대"]}
     if req.new_price_krw is not None:
