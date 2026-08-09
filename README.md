@@ -1,6 +1,38 @@
 # EV-energy-management-fastapi
 
-## BMS 현재 상태 분류 API
+전기차 배터리/충전 관리 플랫폼의 AI 추론 서비스 모음. [backend](../EV-energy-management-backend)가
+직접 계산하지 않는 모든 AI 기능(배터리 안전 분류, 배터리 진단/매도 제안서, 충전 수요 예측, 챗봇,
+디지털 트윈 시나리오)이 이 저장소에서 나온다. 세 개의 독립 서비스로 나뉘어 각자 EKS에 배포된다.
+
+| 서비스 | 경로 | 역할 |
+|---|---|---|
+| **ev_ai_inference_api** | `ev_ai_inference_api/` | BMS 실시간 안전 상태 분류 + 챗봇 + 월간/이상 보고서 + 디지털 트윈 시나리오 재생 |
+| **rul-diagnosis** | `ai-services/rul-diagnosis/` | 배터리 잔여수명(RUL)·SOH 등급 진단, 매입처 매칭, 매도 제안서 PDF 생성 |
+| **charging-demand** | `ai-services/charging-demand/` | 충전 수요 예측 |
+
+세 서비스 모두 대용량 AI 모델 파일(수백 MB)을 쓰는데, GitHub 100MB 제한 때문에 S3 버킷
+(`ev-mgmt-ai-models`)에 모델을 올려두고 GitHub Actions가 빌드 시점에 내려받아 Docker 이미지에
+구워 넣는다. 모델 파일 자체는 git에 커밋하지 않는다.
+
+## 오토스케일링
+
+`rul-diagnosis`(배터리진단)와 `ev_ai_inference_api`(열폭주 감지)는 KEDA + SQS 큐 기반으로
+큐 적체 상황을 보고 1~6개 파드 사이에서 자동 확장/축소된다 — 설정은 gitops 저장소
+`apps/rul-diagnosis/keda-battery-diagnosis.yaml`, `apps/fastapi-eks/keda-thermal-runaway.yaml` 참고.
+
+## 배포
+
+각 서비스 저장소 폴더의 GitHub Actions가 Docker 이미지를 빌드해 push하고, gitops 저장소의
+`apps/{rul-diagnosis,charging-demand,fastapi-eks}/deployment.yaml` 이미지 태그를 갱신하면
+ArgoCD가 자동 반영한다.
+
+## 브랜치 규칙
+
+작업은 `dev_nh`(개인 브랜치)에서 커밋 → 확인 후 `main`에 병합 → CI가 자동 배포.
+
+---
+
+## ev_ai_inference_api — BMS 현재 상태 분류 API
 
 백엔드는 차량의 BMS 수치 JSON을 차량 ID와 함께 FastAPI로 전송합니다.
 
