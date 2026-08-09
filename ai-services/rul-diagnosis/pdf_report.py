@@ -157,6 +157,16 @@ def _section_title(num: int, title: str, st):
                      ParagraphStyle("sectitle", parent=st["sec"], spaceAfter=6))
 
 
+_OPEN_PUNCT = ("「", "『", "\"", "(", "（")
+
+
+def _bullet_gap(text: str) -> str:
+    """□/- 불릿과 본문 사이 공백 폭. 전각 공백("　")이 기본이지만, 「『( 같은 여는
+    괄호·인용부호는 글리프 자체에 좌측 여백이 있어 전각 공백과 합쳐지면 그 줄만 유독
+    벌어져 보인다 - 그런 문자로 시작하는 텍스트는 반각 공백을 써서 간격을 맞춘다."""
+    return " " if text[:1] in _OPEN_PUNCT else "　"
+
+
 def _gov_bullets(items, st):
     """정부 보도자료 스타일 개조식 불릿. items는 (level, text) 리스트 -
     level 0='□'(요지), level 1='-'(부연설명, 들여쓰기). 부연설명은 대시(-)로 표시한다 -
@@ -166,10 +176,10 @@ def _gov_bullets(items, st):
     for level, text in items:
         if level == 0:
             style = ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)
-            flow.append(Paragraph(f"□　{text}", style))
+            flow.append(Paragraph(f"□{_bullet_gap(text)}{text}", style))
         else:
             style = ParagraphStyle("gov1", parent=st["small"], leftIndent=5 * mm, spaceAfter=2)
-            flow.append(Paragraph(f"-　{text}", style))
+            flow.append(Paragraph(f"-{_bullet_gap(text)}{text}", style))
     return flow
 
 
@@ -263,11 +273,11 @@ def _render_freeform_gov(text: str, st):
         for ln in lines:
             if ln.startswith("□"):
                 content = ln[1:].strip("　 ")
-                flow.append(Paragraph(f"□　{content}",
+                flow.append(Paragraph(f"□{_bullet_gap(content)}{content}",
                                       ParagraphStyle("gov0f", parent=st["body"], spaceAfter=2)))
             elif ln.startswith(("-", "○")):  # "○"는 구버전 소스 데이터 호환용
                 content = ln[1:].strip("　 ")
-                flow.append(Paragraph(f"-　{content}",
+                flow.append(Paragraph(f"-{_bullet_gap(content)}{content}",
                                       ParagraphStyle("gov1f", parent=st["small"],
                                                      leftIndent=5 * mm, spaceAfter=2)))
             else:
@@ -543,11 +553,16 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
         fit_block.append(Spacer(1, 1.5 * mm))
         fit_block.append(Paragraph(f"{i}. {_to_gaejosik(r)}",
                                    ParagraphStyle("numfit", parent=st["small"], leftIndent=5 * mm)))
+    # buyer["확인된_사실"]도 buyer["왜"]와 같은 소스(fetch_buyer_disclosure 등)에서 오는
+    # □/- 개조식 여러 줄 텍스트일 수 있다 - 한 Paragraph에 그대로 넣으면 reportlab이
+    # 줄바꿈을 무시해 모든 항목이 붙어버리므로, 여기도 _render_freeform_gov로 줄 단위로
+    # 나눠 그린다.
     buyer_link = _link_html(buyer.get("출처_링크", ""), "참고자료")
     fit_block += [
         Spacer(1, 2 * mm),
-        Paragraph(f"확인된 사업 영역: {_to_gaejosik(buyer['확인된_사실'])}{buyer_link}", st["small"]),
-    ]
+        Paragraph(f"확인된 사업 영역{buyer_link}",
+                 ParagraphStyle("factlabel", parent=st["small"], spaceAfter=1)),
+    ] + _render_freeform_gov(buyer["확인된_사실"], st)
     S.append(KeepTogether(fit_block))
     S.append(Spacer(1, 8 * mm))
 
@@ -565,33 +580,37 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
 
     def _gov_link(text, url, label):
         link = _link_html(url, label) if url else ""
-        return Paragraph(f"-　{text}{link}",
+        return Paragraph(f"-{_bullet_gap(text)}{text}{link}",
                          ParagraphStyle("gov1link", parent=st["small"], leftIndent=5 * mm, spaceAfter=2))
 
-    S.append(Paragraph("□　본 제안가 산정 근거", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    def _gov0(text):
+        return Paragraph(f"□{_bullet_gap(text)}{text}",
+                         ParagraphStyle("gov0", parent=st["body"], spaceAfter=2))
+
+    S.append(_gov0("본 제안가 산정 근거"))
     S.append(_gov_link("공개 실거래·시장 벤치마크 + AI 진단 결과 결합 추정치", "", ""))
     S.append(_gov_link("귀사가 제시한 견적 아님", "", ""))
     S.append(Spacer(1, 2 * mm))
 
-    S.append(Paragraph("□　가격 조정 가능성", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov0("가격 조정 가능성"))
     S.append(_gov_link("최종 가격은 실물 검사(외관·전기적 검사) 및 시황에 따라 조정 가능", "", ""))
     S.append(Spacer(1, 2 * mm))
 
-    S.append(Paragraph("□　「자원순환기본법」 순환자원 지정 고시 대상", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov0("「자원순환기본법」 순환자원 지정 고시 대상"))
     S.append(_gov_link("전기차 사용후 배터리: 폐기물관리법 규제 면제",
                        "https://www.korea.kr/news/policyNewsView.do?newsId=148905610", "정책브리핑(정부) 자료"))
     S.append(_gov_link("단, 단순 수리·수선·건조·세척 등 일반적·품목별 준수사항 충족 필요", "", ""))
     S.append(_gov_link("미충족 시 폐기물처리업 허가 대상 가능", "", ""))
     S.append(Spacer(1, 2 * mm))
 
-    S.append(Paragraph("□　「사용후 배터리의 관리 및 산업육성에 관한 법률」 제정", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov0("「사용후 배터리의 관리 및 산업육성에 관한 법률」 제정"))
     S.append(_gov_link("2026.5.26 공포, 2027.5.27 시행 예정(아직 시행 전)",
                        "https://zdnet.co.kr/view/?no=20260520090026", "관련 보도"))
     S.append(_gov_link("시행 후 탈거 전 성능평가·등급분류 및 전주기 이력·거래시스템 등록 의무화 예정", "", ""))
     S.append(_gov_link("사전 대비 필요", "", ""))
     S.append(Spacer(1, 2 * mm))
 
-    S.append(Paragraph("□　해외 매입처 매도(수출) 시 유의", ParagraphStyle("gov0", parent=st["body"], spaceAfter=2)))
+    S.append(_gov0("해외 매입처 매도(수출) 시 유의"))
     S.append(_gov_link("「폐기물의 국가 간 이동 및 그 처리에 관한 법률」(바젤협약 국내 이행법) 적용", "", ""))
     S.append(_gov_link("사전통보·승인 절차 별도 이행 필요", "", ""))
 
