@@ -50,7 +50,7 @@ INK = colors.HexColor("#1A1A1A")          # 표 헤더/헤드라인용 검정에
 # "하늘색 싫다"는 피드백을 두 번 받아서 이번엔 코드에서 상수 자체를 뺐다.
 
 # ---------------- 담당자 정보 (헤더 문서정보 표에 노출) ----------------
-CONTACT_NAME = "TK야호팀"
+CONTACT_NAME = "김진단"
 CONTACT_EMAIL = "tkyaho@mijungev.kro.kr"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -223,6 +223,39 @@ def _to_gaejosik(text: str) -> str:
     return t
 
 
+# ---------------- 전문용어 각주 ----------------
+# ⚠️ 예전엔 "건강도(SOH)"처럼 본문 문장 안에 매번 괄호로 풀어썼는데, "괄호가 너무 많다"는
+# 피드백을 받아 전문용어 뒤에 별표(*)만 달고 문서 맨 끝(유의사항 다음)에 한 번에 몰아서
+# 설명하는 각주 방식으로 바꿨다. 괄호 안 세부조건/부가정보도 같은 이유로 본문 문장에서
+# 빼서 바로 아래 "-" 하위 항목으로 옮겼다(예: "잔여수명 800사이클(신품 대비 71%)" ->
+# "잔여수명 800사이클" + "- 신품 대비 71%").
+GLOSSARY = [
+    ("건강도", "SOH(State of Health). 신품 대비 배터리 성능 잔존 비율"),
+    ("잔여수명", "RUL(Remaining Useful Life). AI가 예측한 잔여 구동 가능 사이클"),
+    ("정전류 구간", "CC(Constant Current). 배터리가 열화될수록 이 구간이 짧아짐"),
+    ("AI 진단 파이프라인", "Agent1(화재·안전 위험 게이트) → Agent2(SOH 등급 분류) → "
+                       "Agent3(잔여수명·가치 평가) 3단계로 구성"),
+    ("RandomForest", "다수의 결정 트리를 결합해 예측 정확도를 높이는 머신러닝 앙상블 모델"),
+    ("BMS", "Battery Management System(배터리 관리 시스템)"),
+]
+
+
+def _mark(term: str) -> str:
+    """전문용어 뒤에 각주 표시(*)를 붙인다 - GLOSSARY에 같은 용어로 설명을 등록해둬야 한다."""
+    return f"{term}*"
+
+
+def _glossary_block(st):
+    """문서 맨 끝(유의사항 다음)에 붙는 전문용어 각주 - 본문에 흩어져 있던 괄호 설명을
+    여기 한 곳으로 모았다."""
+    flow = [Spacer(1, 4 * mm),
+            Paragraph("용어 설명", ParagraphStyle("glosstitle", parent=st["cellb"], spaceAfter=2))]
+    for term, desc in GLOSSARY:
+        flow.append(Paragraph(f"* {term}: {desc}",
+                              ParagraphStyle("gloss", parent=st["small"], spaceAfter=1.5)))
+    return flow
+
+
 def _render_freeform_gov(text: str, st):
     """buyer["왜"] 렌더링 전용. 이미 "□ ...\\nㅇ ..." 개조식으로 줄바꿈되어 있으면(정적
     BUYERS·discover_buyers 소스가 이렇게 씀) 그 구조를 살려 _gov_bullets와 같은 스타일로
@@ -362,12 +395,13 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
                 if buyer.get("왜") else "")
     S.append(_headline_summary([
         (0, f"{buyer['매입처']}에 사용후 배터리 {capacity_kwh:g}kWh 매도 제안"),
-        (1, f"매입처: {buyer['매입처']}({buyer['역할']})"),
+        (1, f"매입처: {buyer['매입처']}"),
+        (1, f"업종: {buyer['역할']}"),
         (1, f"단가대: {buyer['단가대']}"),
         (0, "AI 진단 결과"),
-        (1, f"판별등급 {grade}, AI 진단 건강도(SOH) {health_pct:.1f}%"),
-        (1, f"예측 잔여수명 {rul_cycles:,.0f}사이클(신품 {full_life:,.0f}사이클 대비 "
-            f"{rul_cycles / full_life * 100:.0f}%)"),
+        (1, f"판별등급 {grade}, AI {_mark('진단 건강도')} {health_pct:.1f}%"),
+        (1, f"{_mark('예측 잔여수명')} {rul_cycles:,.0f}사이클"),
+        (1, f"신품 대비 {rul_cycles / full_life * 100:.0f}%({full_life:,.0f}사이클 기준)"),
         (0, "제안 가격"),
         (1, f"제안총액 {won(buyer['제안가_원'])}, 협의범위 {won(lo)}~{won(hi)}"),
         (1, f"적용단가 {buyer['단가_원per_kWh']:,}원/kWh"),
@@ -415,7 +449,7 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
                                     header=["건전성 세부 지표", "점수"])))
     S.append(Spacer(1, 3 * mm))
     for f in _gov_bullets([
-        (0, "진단 방식: 충·방전 센서값을 RandomForest 회귀·분류 모델로 분석"),
+        (0, f"진단 방식: 충·방전 센서값을 {_mark('RandomForest')} 회귀·분류 모델로 분석"),
         (1, "잔여수명 예측 평균오차 ±11 사이클"),
         (1, "등급 판별 정확도 98.4%"),
     ], st):
@@ -453,10 +487,13 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
     ], st) + [Spacer(1, 2 * mm)] + _gov_bullets([
         (0, "재활용 등급 내 이상징후 취급"),
         (1, "재활용은 SOH 하한 없음. 단, 물리적 손상·열폭주 전조 등 안전 이상은 별도 감지"),
-        (1, "화재 위험 게이트(Agent1, fire_risk_model) 위험 감지 시 SOH 등급 무관 즉시 폐기·특별취급 대상 분류(후속 등급 판정 미진행)"),
-        (1, "실무 문헌은 셀 단위 계측(내부저항 증가율·셀간 전압편차) 권장"),
+        (1, f"{_mark('화재 위험 게이트')} 위험 감지 시 SOH 등급 무관 즉시 폐기·특별취급 대상 분류"),
+        (1, "위험 감지 시 후속 등급 판정은 진행하지 않음"),
+        (1, "실무 문헌은 셀 단위 계측 권장"),
+        (1, "측정 항목 예시: 내부저항 증가율, 셀간 전압편차"),
         (1, "본 진단은 비침습 방식: 팩 단위 충·방전 센서값 기반 전압 강하 패턴 지표 사용"),
-        (1, "셀 단위 IR·전압편차 계측은 팩 분해 또는 BMS 직접 연동 필요(본 진단 범위인 비분해 검사 밖의 정밀 진단 항목으로 별도 분류)"),
+        (1, f"셀 단위 IR·전압편차 계측은 팩 분해 또는 {_mark('BMS')} 직접 연동 필요"),
+        (1, "본 진단 범위(비분해 검사) 밖의 정밀 진단 항목으로 별도 분류"),
     ], st)))
     if fire_note:
         S.append(Spacer(1, 2 * mm))
@@ -565,6 +602,10 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
     S.append(_gov_link("「폐기물의 국가 간 이동 및 그 처리에 관한 법률」(바젤협약 국내 이행법) 적용", "", ""))
     S.append(_gov_link("사전통보·승인 절차 별도 이행 필요", "", ""))
 
+    # ── 용어 설명 (전문용어 각주 - 본문의 "*" 표시된 용어를 여기서 한 번에 설명)
+    for f in _glossary_block(st):
+        S.append(f)
+
     # ── 서명란
     S.append(Spacer(1, 10 * mm))
     sign = Table([["제 안 자", CONTACT_NAME, "( 인 )"]],
@@ -642,11 +683,12 @@ def build_pdf_from_view(*, buyer_name: str = "매입 희망 기업", buyer_role:
                     if reasons else "")
     S.append(_headline_summary([
         (0, f"{buyer_name}에 사용후 배터리 매도 제안"),
-        (1, f"매입처: {buyer_name}" + (f"({buyer_role})" if buyer_role else "")),
+        (1, f"매입처: {buyer_name}"),
+    ] + ([(1, f"업종: {buyer_role}")] if buyer_role else []) + [
         (0, "AI 진단 결과"),
-        (1, f"판별등급 {grade}, AI 진단 건강도(SOH) {health_score_pct:.1f}%"),
-        (1, f"예측 잔여수명 {remaining_cycle:,.0f}사이클(신품 {new_cycle:,.0f}사이클 대비 "
-            f"{remaining_cycle / new_cycle * 100:.0f}%)"),
+        (1, f"판별등급 {grade}, AI {_mark('진단 건강도')} {health_score_pct:.1f}%"),
+        (1, f"{_mark('예측 잔여수명')} {remaining_cycle:,.0f}사이클"),
+        (1, f"신품 대비 {remaining_cycle / new_cycle * 100:.0f}%({new_cycle:,.0f}사이클 기준)"),
         (0, "제안 가격"),
         (1, f"제안총액 {price_total_manwon:,.0f}만원, 협의범위 {negotiation_range}"),
         (1, f"적용단가 {unit_price_won:,.0f}원/kWh({price_grade_label})"),
@@ -705,6 +747,10 @@ def build_pdf_from_view(*, buyer_name: str = "매입 희망 기업", buyer_role:
             S.append(Paragraph(f"{i}. {_to_gaejosik(c)}",
                                ParagraphStyle("numcv", parent=st["small"], leftIndent=5 * mm)))
             S.append(Spacer(1, 1.5 * mm))
+
+    # ── 용어 설명 (전문용어 각주 - 본문의 "*" 표시된 용어를 여기서 한 번에 설명)
+    for f in _glossary_block(st):
+        S.append(f)
 
     S.append(Spacer(1, 10 * mm))
     sign = Table([["제 안 자", CONTACT_NAME, "( 인 )"]],
