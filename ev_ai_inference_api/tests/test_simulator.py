@@ -8,19 +8,23 @@ from app.simulator import (
     KOREA_TIMEZONE,
     SEED_FRAME_COUNT,
     SEED_TRIGGER_FRAME_INDEX,
-    VEHICLE_PROFILES,
     _cap_profile_frame,
     _incident_trigger_at,
+    build_vehicle_profiles,
     build_seed_frame,
 )
 
 
 START = datetime(2026, 7, 31, tzinfo=timezone.utc)
+VEHICLE_IDS = tuple(
+    f"00000000-0000-4000-8000-{index:012d}" for index in range(1, 11)
+)
+VEHICLE_PROFILES = build_vehicle_profiles(VEHICLE_IDS)
 
 
-def test_vehicle_profiles_match_controller_car_list() -> None:
+def test_vehicle_profiles_bind_to_exact_rds_car_ids() -> None:
     assert [profile.vehicle_id for profile in VEHICLE_PROFILES] == [
-        f"car-uuid-{index:03d}" for index in range(1, 11)
+        *VEHICLE_IDS
     ]
     assert [profile.risk_level for profile in VEHICLE_PROFILES] == [
         3, 2, 1, 0, 2, 0, 3, 0, 1, 0
@@ -49,6 +53,13 @@ def test_vehicle_profiles_match_controller_car_list() -> None:
         "15:00:00",
         "15:10:20",
     ]
+
+
+def test_vehicle_profiles_reject_non_uuid_or_duplicate_ids() -> None:
+    with pytest.raises(ValueError):
+        build_vehicle_profiles(("car-uuid-001", *VEHICLE_IDS[1:]))
+    with pytest.raises(ValueError, match="unique"):
+        build_vehicle_profiles((VEHICLE_IDS[0], VEHICLE_IDS[0], *VEHICLE_IDS[2:]))
 
 
 def test_profile_charging_time_is_the_incident_trigger_in_korea() -> None:

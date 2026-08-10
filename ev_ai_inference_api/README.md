@@ -37,8 +37,13 @@ docker compose ps
 docker compose exec api python -m app.simulator seed-history
 ```
 
-`seed-history`는 프론트 mock ID와 같은 `car-uuid-001`부터 `003`까지 세 차량에
-완료된 3시간 사건과 차량당 정확히 10,800개 프레임을 만듭니다. 실시간 전송은
+`seed-history`와 `replay-live`는 기본적으로 RDS `CAR` 테이블에서 차량번호 순으로
+실제 `car_id` UUID 10개를 읽어 시연 프로필에 결합합니다. 다른 차량 집합을 고정하려면
+`TWIN_DEMO_VEHICLE_IDS` 환경변수 또는 `--vehicle-ids` 옵션에 쉼표로 구분한 UUID 10개를
+지정합니다. UUID가 아닌 `car-uuid-001` 같은 mock 식별자는 실시간 시연에 사용하지 않습니다.
+
+`seed-history`는 위험 프로필이 배정된 실제 차량에 완료된 3시간 사건과 차량당 정확히
+10,800개 프레임을 만듭니다. 실시간 전송은
 Windows 호스트의 가상환경에서 실행하며 `--speed`는 논리적 1Hz 대비 배속입니다.
 
 ```powershell
