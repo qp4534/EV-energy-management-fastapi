@@ -29,6 +29,33 @@ class FakeStore:
         self.published.append(frame)
 
 
+class FakeClock:
+    def __init__(self, now: float = 100.0) -> None:
+        self.now = now
+        self.sleep_calls: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleep_calls.append(seconds)
+        self.advance(seconds)
+
+
+class SlowFakeStore(FakeStore):
+    def __init__(self, clock: FakeClock, processing_seconds: float) -> None:
+        super().__init__()
+        self.clock = clock
+        self.processing_seconds = processing_seconds
+
+    async def publish_live_only(self, frame) -> None:
+        self.clock.advance(self.processing_seconds)
+        await super().publish_live_only(frame)
+
+
 def test_load_assignments_from_file(tmp_path) -> None:
     path = tmp_path / "assignments.json"
     path.write_text(
@@ -139,3 +166,41 @@ async def test_replay_scenarios_publishes_rewritten_frames(tmp_path) -> None:
     ]
     assert first_car[0].temperature_decic == frames[0].temperature_decic
     assert second_car[0].temperature_decic == frames[2].temperature_decic
+
+
+@pytest.mark.asyncio
+async def test_replay_scenarios_subtracts_publish_time_from_each_interval(
+    tmp_path,
+) -> None:
+    scenario = SCENARIO_BY_ID["normal"]
+    frames = await generate_scenario_frames(
+        scenario,
+        frame_count=3,
+        start_at=START,
+    )
+    write_scenario_dataset(scenario, frames, tmp_path)
+    assignments = [
+        VehicleScenarioAssignment(
+            vehicle_id="car-11111111-1111-1111-1111-111111111111",
+            car_number="11가6762",
+            model="GV60",
+            scenario_id="normal",
+            offset_seconds=0,
+        )
+    ]
+    clock = FakeClock()
+    store = SlowFakeStore(clock, processing_seconds=0.2)
+
+    count = await replay_scenarios(
+        store,
+        assignments,
+        load_compact_datasets(tmp_path),
+        start_at=START,
+        speed=1.0,
+        duration_seconds=3,
+        _monotonic=clock.monotonic,
+        _sleep=clock.sleep,
+    )
+
+    assert count == 3
+    assert clock.sleep_calls == pytest.approx([0.8, 0.8])
