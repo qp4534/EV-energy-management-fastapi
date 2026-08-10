@@ -7,6 +7,7 @@ import io
 import json
 import math
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime, timedelta, timezone
@@ -490,6 +491,8 @@ async def replay_scenarios(
     start_at: datetime,
     speed: float,
     duration_seconds: int | None = None,
+    _monotonic: Callable[[], float] | None = None,
+    _sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> int:
     """Publish one pre-computed frame per vehicle per logical second."""
 
@@ -503,6 +506,8 @@ async def replay_scenarios(
     if missing:
         raise ValueError(f"missing scenario datasets: {sorted(missing)}")
 
+    monotonic = _monotonic or asyncio.get_running_loop().time
+    replay_started_at = monotonic()
     loop_second = 0
     while duration_seconds is None or loop_second < duration_seconds:
         observed_at = start_at + timedelta(seconds=loop_second)
@@ -518,7 +523,8 @@ async def replay_scenarios(
         loop_second += 1
         if duration_seconds is not None and loop_second >= duration_seconds:
             break
-        await asyncio.sleep(1.0 / speed)
+        next_deadline = replay_started_at + (loop_second / speed)
+        await _sleep(max(0.0, next_deadline - monotonic()))
     return loop_second
 
 
