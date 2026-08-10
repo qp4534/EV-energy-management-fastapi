@@ -185,6 +185,24 @@ class RiskVehicleListResponse(BaseModel):
     items: list[RiskVehicleItem]
 
 
+class TwinLatestMeasurement(BaseModel):
+    """Small, explicit contract for current vehicle/passport displays."""
+
+    vehicle_id: str
+    observed_at: AwareDatetime
+    sequence: SequenceNumber
+    source: Literal["twin_live"] = "twin_live"
+    max_cell_temperature_c: float
+    mean_cell_temperature_c: float
+    max_connector_temperature_c: float
+    min_cell_voltage_v: float
+    max_cell_voltage_v: float
+    final_risk_level: StateLevel
+    age_seconds: float = Field(ge=0.0)
+    stale_after_seconds: Annotated[int, Field(strict=True, ge=1, le=300)]
+    is_stale: bool
+
+
 class IncidentSummary(BaseModel):
     id: str
     vehicle_id: str

@@ -37,8 +37,13 @@ docker compose ps
 docker compose exec api python -m app.simulator seed-history
 ```
 
-`seed-history`는 프론트 mock ID와 같은 `car-uuid-001`부터 `003`까지 세 차량에
-완료된 3시간 사건과 차량당 정확히 10,800개 프레임을 만듭니다. 실시간 전송은
+`seed-history`와 `replay-live`는 기본적으로 RDS `CAR` 테이블에서 차량번호 순으로
+실제 `car_id` UUID 10개를 읽어 시연 프로필에 결합합니다. 다른 차량 집합을 고정하려면
+`TWIN_DEMO_VEHICLE_IDS` 환경변수 또는 `--vehicle-ids` 옵션에 쉼표로 구분한 UUID 10개를
+지정합니다. UUID가 아닌 `car-uuid-001` 같은 mock 식별자는 실시간 시연에 사용하지 않습니다.
+
+`seed-history`는 위험 프로필이 배정된 실제 차량에 완료된 3시간 사건과 차량당 정확히
+10,800개 프레임을 만듭니다. 실시간 전송은
 Windows 호스트의 가상환경에서 실행하며 `--speed`는 논리적 1Hz 대비 배속입니다.
 
 ```powershell
@@ -48,6 +53,8 @@ Windows 호스트의 가상환경에서 실행하며 `--speed`는 논리적 1Hz 
 Twin API는 다음 계약을 제공합니다.
 
 - `POST /api/v1/twins/vehicles/{vehicle_id}/samples`
+- `GET /api/v1/twins/vehicles/{vehicle_id}/latest`
+- `GET /api/v1/twins/vehicles/{vehicle_id}/latest/measurement?stale_after_seconds=10`
 - `GET /api/v1/twins/risk-vehicles`
 - `GET /api/v1/twins/vehicles/{vehicle_id}/incidents`
 - `GET /api/v1/twins/vehicles/{vehicle_id}/incidents/latest/history?resolution_seconds=30`
@@ -64,6 +71,14 @@ Twin API는 다음 계약을 제공합니다.
 사용합니다. 셀·커넥터 임계값과 열화상 결과는 3D 시각화용 상태이며 이 최종 판정을
 덮어쓰지 않습니다. `fusion_source`는 셀·모듈 시각화에 사용된 입력을 설명합니다.
 기존 `/v1/vehicles/{vehicle_id}/samples` 계약은 그대로 유지됩니다.
+
+배터리 여권처럼 현재 상태를 표시하는 화면은 `latest/measurement`의
+`max_cell_temperature_c`를 "현재 최고 셀 온도"로 표시하고 `observed_at`,
+`is_stale`을 함께 확인해야 합니다. 이 값은 Redis의 차량별 최신 Twin 프레임에서만
+계산하며 `BATTERY_PASSPORT.current_temp`와 섞지 않습니다. 반면 이상 안전보고서는
+해당 `anomaly_id`에 연결되고 감지 시각에 가장 가까운 `TWIN_FRAMES.model_input`만
+사용합니다. 사건 프레임에 온도가 없으면 여권 온도로 대체하지 않고 측정 데이터 없음으로
+표시해 과거 사건과 현재 상태가 섞이지 않도록 합니다.
 
 `k8s/`는 일반 Kubernetes manifest만 제공하며 이미지 URI는 `REPLACE_WITH_IMAGE_URI` placeholder입니다. AWS 계정·리전·ECR·EKS 정보는 포함하지 않았습니다.
 

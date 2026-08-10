@@ -7,12 +7,13 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, time as wall_clock_time, timedelta, timezone
 from pathlib import Path
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
 from pydantic import TypeAdapter
 from redis.asyncio import Redis
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 
 from app.core.config import Settings
 from app.core.twin_redis import RISK_SORTED_SET, TwinRedisStore, latest_key, prebuffer_key
@@ -48,54 +49,73 @@ class VehicleDemoProfile:
     charging_time: wall_clock_time
 
 
-VEHICLE_PROFILES = (
-    VehicleDemoProfile(
-        "car-uuid-001", 3, "temperature_rise", INCIDENT_TYPE_BATTERY,
-        wall_clock_time(14, 0, 0),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-002", 2, "fire_risk", INCIDENT_TYPE_CONNECTOR,
-        wall_clock_time(14, 0, 0),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-003", 1, "temperature_rise", INCIDENT_TYPE_BATTERY,
-        wall_clock_time(14, 0, 0),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-004", 0, "normal", None,
-        wall_clock_time(14, 12, 30),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-005", 2, "overcharge_warning", INCIDENT_TYPE_BATTERY,
-        wall_clock_time(14, 25, 10),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-006", 0, "normal", None,
-        wall_clock_time(14, 30, 0),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-007", 3, "fire_risk", INCIDENT_TYPE_CONNECTOR,
-        wall_clock_time(14, 40, 15),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-008", 0, "normal", None,
-        wall_clock_time(14, 45, 0),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-009", 1, "temperature_rise", INCIDENT_TYPE_BATTERY,
-        wall_clock_time(15, 0, 0),
-    ),
-    VehicleDemoProfile(
-        "car-uuid-010", 0, "normal", None,
-        wall_clock_time(15, 10, 20),
-    ),
+PROFILE_LAYOUT = (
+    (3, "temperature_rise", INCIDENT_TYPE_BATTERY, wall_clock_time(14, 0, 0)),
+    (2, "fire_risk", INCIDENT_TYPE_CONNECTOR, wall_clock_time(14, 0, 0)),
+    (1, "temperature_rise", INCIDENT_TYPE_BATTERY, wall_clock_time(14, 0, 0)),
+    (0, "normal", None, wall_clock_time(14, 12, 30)),
+    (2, "overcharge_warning", INCIDENT_TYPE_BATTERY, wall_clock_time(14, 25, 10)),
+    (0, "normal", None, wall_clock_time(14, 30, 0)),
+    (3, "fire_risk", INCIDENT_TYPE_CONNECTOR, wall_clock_time(14, 40, 15)),
+    (0, "normal", None, wall_clock_time(14, 45, 0)),
+    (1, "temperature_rise", INCIDENT_TYPE_BATTERY, wall_clock_time(15, 0, 0)),
+    (0, "normal", None, wall_clock_time(15, 10, 20)),
 )
-VEHICLE_IDS = tuple(profile.vehicle_id for profile in VEHICLE_PROFILES)
-VEHICLE_RISK_LEVELS = tuple(profile.risk_level for profile in VEHICLE_PROFILES)
 SEED_FRAME_COUNT = 10_800
 LIVE_FRAME_COUNT = 10_801
 SEED_TRIGGER_FRAME_INDEX = 3_599
 _AWARE_DATETIME = TypeAdapter(datetime)
+
+
+def build_vehicle_profiles(vehicle_ids: tuple[str, ...]) -> tuple[VehicleDemoProfile, ...]:
+    """Bind the demo risk layout to real CAR.car_id UUID values."""
+
+    if len(vehicle_ids) != len(PROFILE_LAYOUT):
+        raise ValueError(f"exactly {len(PROFILE_LAYOUT)} vehicle UUIDs are required")
+    normalized = tuple(str(UUID(value)) for value in vehicle_ids)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("demo vehicle UUIDs must be unique")
+    return tuple(
+        VehicleDemoProfile(vehicle_id, risk, abnormal, incident, charging_time)
+        for vehicle_id, (risk, abnormal, incident, charging_time) in zip(
+            normalized, PROFILE_LAYOUT, strict=True
+        )
+    )
+
+
+def parse_vehicle_ids(raw: str) -> tuple[str, ...]:
+    values = tuple(value.strip() for value in raw.split(",") if value.strip())
+    return tuple(profile.vehicle_id for profile in build_vehicle_profiles(values))
+
+
+async def resolve_demo_vehicle_ids(explicit: str | None = None) -> tuple[str, ...]:
+    """Resolve demo vehicles from an override or the live RDS CAR table."""
+
+    configured = explicit or os.getenv("TWIN_DEMO_VEHICLE_IDS")
+    if configured:
+        return parse_vehicle_ids(configured)
+
+    settings = Settings.load()
+    engine, sessions = create_database(settings.database_url)
+    try:
+        async with sessions() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        'SELECT car_id FROM public."CAR" '
+                        "ORDER BY car_number ASC LIMIT :limit"
+                    ),
+                    {"limit": len(PROFILE_LAYOUT)},
+                )
+            ).scalars().all()
+    finally:
+        await engine.dispose()
+    if len(rows) != len(PROFILE_LAYOUT):
+        raise RuntimeError(
+            f"RDS CAR must contain at least {len(PROFILE_LAYOUT)} vehicles; "
+            f"found {len(rows)}"
+        )
+    return tuple(str(value) for value in rows)
 
 
 def _parse_aware(value: str) -> datetime:
@@ -465,8 +485,10 @@ async def _decorate_seed_frame(
     ), max_risk_level)
 
 
-async def seed_history(start_at: datetime) -> None:
+async def seed_history(start_at: datetime, vehicle_ids_override: str | None = None) -> None:
     settings = Settings.load()
+    vehicle_ids = await resolve_demo_vehicle_ids(vehicle_ids_override)
+    vehicle_profiles = build_vehicle_profiles(vehicle_ids)
     engine, sessions = create_database(settings.database_url)
     redis = Redis.from_url(settings.redis_url, decode_responses=False)
     store = TwinRedisStore(redis)
@@ -486,10 +508,10 @@ async def seed_history(start_at: datetime) -> None:
             async with session.begin():
                 await session.execute(
                     delete(TwinIncident).where(
-                        TwinIncident.vehicle_id.in_(VEHICLE_IDS)
+                        TwinIncident.vehicle_id.in_(vehicle_ids)
                     )
                 )
-        for vehicle_number, profile in enumerate(VEHICLE_PROFILES):
+        for vehicle_number, profile in enumerate(vehicle_profiles):
             if profile.incident_type is None:
                 continue
             incident_type = profile.incident_type
@@ -552,7 +574,7 @@ async def seed_history(start_at: datetime) -> None:
             )
 
         latest_at = datetime.now(timezone.utc).replace(microsecond=0)
-        for vehicle_number, profile in enumerate(VEHICLE_PROFILES):
+        for vehicle_number, profile in enumerate(vehicle_profiles):
             if profile.incident_type is None:
                 latest_frame = build_seed_frame(
                     vehicle_id=profile.vehicle_id,
@@ -583,16 +605,19 @@ async def seed_history(start_at: datetime) -> None:
         await engine.dispose()
 
 
-async def reset_live_state(client: httpx.AsyncClient) -> None:
+async def reset_live_state(
+    client: httpx.AsyncClient,
+    vehicle_ids: tuple[str, ...],
+) -> None:
     settings = Settings.load()
     redis = Redis.from_url(settings.redis_url, decode_responses=False)
     try:
         pipe = redis.pipeline(transaction=True)
-        for vehicle_id in VEHICLE_IDS:
+        for vehicle_id in vehicle_ids:
             pipe.delete(latest_key(vehicle_id), prebuffer_key(vehicle_id))
             pipe.zrem(RISK_SORTED_SET, vehicle_id)
         await pipe.execute()
-        for vehicle_id in VEHICLE_IDS:
+        for vehicle_id in vehicle_ids:
             response = await client.post(f"/v1/vehicles/{vehicle_id}/reset")
             response.raise_for_status()
     finally:
@@ -606,18 +631,21 @@ async def replay_live(
     speed: float,
     keep_state: bool,
     with_thermal: bool = False,
+    vehicle_ids_override: str | None = None,
 ) -> None:
     if not math.isfinite(speed) or speed <= 0:
         raise ValueError("speed must be a positive finite number")
+    vehicle_ids = await resolve_demo_vehicle_ids(vehicle_ids_override)
+    vehicle_profiles = build_vehicle_profiles(vehicle_ids)
     demo_profiles = load_demo_profiles()
     async with httpx.AsyncClient(base_url=api_url, timeout=60.0) as client:
         if not keep_state:
-            await reset_live_state(client)
+            await reset_live_state(client, vehicle_ids)
         for index in range(LIVE_FRAME_COUNT):
             risk_active = index >= 3_600
             observed_at = start_at + timedelta(seconds=index)
             payloads: list[TwinSampleRequest] = []
-            for vehicle_number, profile in enumerate(VEHICLE_PROFILES):
+            for vehicle_number, profile in enumerate(vehicle_profiles):
                 if not risk_active or profile.incident_type is None:
                     payloads.append(
                         build_sample(
@@ -651,7 +679,7 @@ async def replay_live(
                 )
                 payloads.append(_sample_from_frame(twin_frame))
             requests = []
-            for vehicle_id, payload in zip(VEHICLE_IDS, payloads, strict=True):
+            for vehicle_id, payload in zip(vehicle_ids, payloads, strict=True):
                 if with_thermal:
                     rendered = render_thermal_frame(vehicle_id, payload)
                     requests.append(
@@ -698,6 +726,14 @@ def parse_args() -> argparse.Namespace:
         type=_parse_aware,
         default=datetime(2026, 7, 31, tzinfo=timezone.utc),
     )
+    seed.add_argument(
+        "--vehicle-ids",
+        default=None,
+        help=(
+            "Comma-separated ten CAR.car_id UUIDs. If omitted, the first ten "
+            "RDS CAR rows ordered by car_number are used."
+        ),
+    )
 
     live = subparsers.add_parser(
         "replay-live", description="POST ten profile-matched logical 1 Hz streams"
@@ -719,13 +755,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Render a synchronized thermal PNG and use the observation endpoint",
     )
+    live.add_argument(
+        "--vehicle-ids",
+        default=None,
+        help=(
+            "Comma-separated ten CAR.car_id UUIDs. If omitted, the first ten "
+            "RDS CAR rows ordered by car_number are used."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     if args.command == "seed-history":
-        asyncio.run(seed_history(args.start_at))
+        asyncio.run(seed_history(args.start_at, args.vehicle_ids))
         return
     start_at = args.start_at or datetime.now(timezone.utc).replace(microsecond=0)
     asyncio.run(
@@ -735,6 +779,7 @@ def main() -> None:
             speed=args.speed,
             keep_state=args.keep_state,
             with_thermal=args.with_thermal,
+            vehicle_ids_override=args.vehicle_ids,
         )
     )
 

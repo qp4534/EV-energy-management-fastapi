@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import re
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,6 +18,7 @@ from app.schemas.twins import (
     RiskVehicleListResponse,
     TwinFrame,
     TwinHistoryResponse,
+    TwinLatestMeasurement,
     TwinSampleRequest,
 )
 
@@ -125,6 +127,39 @@ def build_model_request(payload: TwinSampleRequest) -> SampleRequest:
     """Convert a twin sensor payload into the BMS supervisor input."""
 
     return _model_request(payload)
+
+
+def latest_measurement(
+    frame: TwinFrame,
+    *,
+    stale_after_seconds: int,
+    now: datetime | None = None,
+) -> TwinLatestMeasurement:
+    """Summarize the live Twin frame without mixing in passport snapshots."""
+
+    if not 1 <= stale_after_seconds <= 300:
+        raise ValueError("stale_after_seconds must be between 1 and 300")
+    current_time = now or datetime.now(timezone.utc)
+    age_seconds = max(0.0, (current_time - frame.observed_at).total_seconds())
+    temperatures_c = [value / 10.0 for value in frame.temperature_decic]
+    connector_temperatures_c = [
+        value / 10.0 for value in frame.connector_temperature_decic
+    ]
+    voltages_v = [value / 1_000.0 for value in frame.voltage_mv]
+    return TwinLatestMeasurement(
+        vehicle_id=frame.vehicle_id,
+        observed_at=frame.observed_at,
+        sequence=frame.sequence,
+        max_cell_temperature_c=max(temperatures_c),
+        mean_cell_temperature_c=sum(temperatures_c) / len(temperatures_c),
+        max_connector_temperature_c=max(connector_temperatures_c),
+        min_cell_voltage_v=min(voltages_v),
+        max_cell_voltage_v=max(voltages_v),
+        final_risk_level=frame.final_risk_level,
+        age_seconds=age_seconds,
+        stale_after_seconds=stale_after_seconds,
+        is_stale=age_seconds > stale_after_seconds,
+    )
 
 
 class TwinService:

@@ -59,6 +59,9 @@ class FakeTwinService:
             }
         )
 
+    async def latest(self, vehicle_id):
+        return frame().model_copy(update={"vehicle_id": vehicle_id})
+
     async def risk_vehicles(self):
         value = frame()
         return RiskVehicleListResponse(
@@ -129,6 +132,20 @@ def test_twin_http_contracts_and_cors() -> None:
         assert posted.status_code == 200
         assert posted.json()["layout_id"] == "generic_ev_concept_96_v1"
         assert len(posted.json()["temperature_decic"]) == 96
+
+        latest_measurement = client.get(
+            "/api/v1/twins/vehicles/car-uuid-001/latest/measurement",
+            params={"stale_after_seconds": 10},
+        )
+        assert latest_measurement.status_code == 200
+        latest_payload = latest_measurement.json()
+        assert latest_payload["source"] == "twin_live"
+        assert latest_payload["max_cell_temperature_c"] == 35.0
+        assert latest_payload["mean_cell_temperature_c"] == 35.0
+        assert latest_payload["max_connector_temperature_c"] == 50.0
+        assert latest_payload["min_cell_voltage_v"] == 3.8
+        assert latest_payload["max_cell_voltage_v"] == 3.8
+        assert latest_payload["is_stale"] is True
 
         risks = client.get("/api/v1/twins/risk-vehicles").json()
         assert risks == {

@@ -190,8 +190,7 @@ class PostgresReportRepository:
                             COALESCE(soh_current.soh_score, battery.soh_score)
                                 AS soh_score,
                             soh_previous.soh_score AS previous_soh_score,
-                            battery.charge_cycles,
-                            battery.current_temp AS passport_current_temp
+                            battery.charge_cycles
                         FROM public."ANOMALY_LOGS" a
                         LEFT JOIN public."CAR" c ON c.car_id = a.car_id
                         LEFT JOIN public."BATTERY_PASSPORT" battery
@@ -217,7 +216,11 @@ class PostgresReportRepository:
                             SELECT *
                             FROM public."TWIN_FRAMES" tf
                             WHERE tf.anomaly_id = a.anomaly_id
-                            ORDER BY tf.observed_at DESC
+                            ORDER BY
+                                ABS(EXTRACT(EPOCH FROM (
+                                    tf.observed_at - a.detected_at
+                                ))),
+                                tf.observed_at DESC
                             LIMIT 1
                         ) frame ON TRUE
                         WHERE a.anomaly_id = :anomaly_id
