@@ -220,9 +220,6 @@ class ReportGenerationService:
         raw_metrics = facts.get("raw_metrics") or {}
         temperature = _number(model_input.get("temp_max_c"))
         temperature_caption = "이상 감지 시점 최고값"
-        if temperature is None:
-            temperature = _number(facts.get("passport_current_temp"))
-            temperature_caption = "배터리 패스포트 최신값"
 
         soh = _number(facts.get("soh_score"))
         previous_soh = _number(facts.get("previous_soh_score"))

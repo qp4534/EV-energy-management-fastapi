@@ -48,6 +48,8 @@ Windows 호스트의 가상환경에서 실행하며 `--speed`는 논리적 1Hz 
 Twin API는 다음 계약을 제공합니다.
 
 - `POST /api/v1/twins/vehicles/{vehicle_id}/samples`
+- `GET /api/v1/twins/vehicles/{vehicle_id}/latest`
+- `GET /api/v1/twins/vehicles/{vehicle_id}/latest/measurement?stale_after_seconds=10`
 - `GET /api/v1/twins/risk-vehicles`
 - `GET /api/v1/twins/vehicles/{vehicle_id}/incidents`
 - `GET /api/v1/twins/vehicles/{vehicle_id}/incidents/latest/history?resolution_seconds=30`
@@ -64,6 +66,14 @@ Twin API는 다음 계약을 제공합니다.
 사용합니다. 셀·커넥터 임계값과 열화상 결과는 3D 시각화용 상태이며 이 최종 판정을
 덮어쓰지 않습니다. `fusion_source`는 셀·모듈 시각화에 사용된 입력을 설명합니다.
 기존 `/v1/vehicles/{vehicle_id}/samples` 계약은 그대로 유지됩니다.
+
+배터리 여권처럼 현재 상태를 표시하는 화면은 `latest/measurement`의
+`max_cell_temperature_c`를 "현재 최고 셀 온도"로 표시하고 `observed_at`,
+`is_stale`을 함께 확인해야 합니다. 이 값은 Redis의 차량별 최신 Twin 프레임에서만
+계산하며 `BATTERY_PASSPORT.current_temp`와 섞지 않습니다. 반면 이상 안전보고서는
+해당 `anomaly_id`에 연결되고 감지 시각에 가장 가까운 `TWIN_FRAMES.model_input`만
+사용합니다. 사건 프레임에 온도가 없으면 여권 온도로 대체하지 않고 측정 데이터 없음으로
+표시해 과거 사건과 현재 상태가 섞이지 않도록 합니다.
 
 `k8s/`는 일반 Kubernetes manifest만 제공하며 이미지 URI는 `REPLACE_WITH_IMAGE_URI` placeholder입니다. AWS 계정·리전·ECR·EKS 정보는 포함하지 않았습니다.
 

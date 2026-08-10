@@ -186,6 +186,38 @@ async def test_anomaly_report_uses_voltage_trigger_when_cell_values_are_missing(
 
 
 @pytest.mark.asyncio
+async def test_anomaly_report_never_uses_passport_temperature_as_event_temperature() -> None:
+    facts = {
+        "detected_at": NOW,
+        "abnormal_type": "배터리 과열 징후",
+        "source_type": "BMS",
+        "risk_level": "경고",
+        "model_input": {},
+        "passport_current_temp": 19.1,
+        "raw_metrics": {},
+    }
+    service = ReportGenerationService(
+        FakeReportData(anomaly=facts),
+        FakeRag(),
+        FakeGenerator(),
+        now=lambda: NOW,
+    )
+
+    _, report = await service.generate(job(ReportType.ANOMALY))
+    payload = report.model_dump(mode="json", by_alias=True)
+    metric_section = next(
+        section for section in payload["sections"] if section["title"] == "이상 지표"
+    )
+    temperature_metric = next(
+        item for item in metric_section["items"] if item["label"] == "배터리 온도"
+    )
+
+    assert temperature_metric["value"] == "확인 불가"
+    assert "unit" not in temperature_metric
+    assert "modelInput" in payload["missingFields"]
+
+
+@pytest.mark.asyncio
 async def test_anomaly_report_does_not_treat_unrelated_trigger_as_voltage() -> None:
     facts = {
         "detected_at": NOW,

@@ -10,12 +10,14 @@ from app.schemas.twins import (
     RiskVehicleListResponse,
     TwinFrame,
     TwinHistoryResponse,
+    TwinLatestMeasurement,
     TwinSampleRequest,
 )
 from app.services.twin_service import (
     IncidentNotFound,
     InvalidVehicleId,
     TwinSequenceConflict,
+    latest_measurement,
 )
 
 
@@ -91,6 +93,31 @@ async def risk_vehicles(request: Request) -> RiskVehicleListResponse:
 async def latest(vehicle_id: str, request: Request) -> TwinFrame:
     try:
         return await _service(request).latest(vehicle_id)
+    except InvalidVehicleId as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IncidentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RedisError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="Redis unavailable") from exc
+
+
+@router.get(
+    "/vehicles/{vehicle_id}/latest/measurement",
+    response_model=TwinLatestMeasurement,
+)
+async def latest_vehicle_measurement(
+    vehicle_id: str,
+    request: Request,
+    stale_after_seconds: int = Query(default=10, ge=1, le=300),
+) -> TwinLatestMeasurement:
+    """Return live Twin metrics for current UI displays such as a passport card."""
+
+    try:
+        frame = await _service(request).latest(vehicle_id)
+        return latest_measurement(
+            frame,
+            stale_after_seconds=stale_after_seconds,
+        )
     except InvalidVehicleId as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except IncidentNotFound as exc:
