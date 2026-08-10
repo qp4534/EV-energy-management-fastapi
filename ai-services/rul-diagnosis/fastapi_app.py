@@ -9,15 +9,15 @@
     uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
 
 환경변수:
-    ANTHROPIC_API_KEY  — Agent1~3 종합 리포트(Claude 1회 호출)에 사용.
-                         서버 쪽에만 두고 클라이언트에는 절대 노출하지 않는다.
+    DEEPSEEK_API_KEY_NH  — Agent1~3 종합 리포트(DeepSeek 1회 호출)에 사용.
+                           서버 쪽에만 두고 클라이언트에는 절대 노출하지 않는다.
 
 엔드포인트:
     GET  /health                 — 헬스체크 + 로드된 모델 정보
     POST /agents/safety-guard    — Agent 1만 단독 호출 (화재 위험)
     POST /agents/status-classifier — Agent 2만 단독 호출 (SOH 등급)
     POST /agents/value-assessor   — Agent 3만 단독 호출 (RUL + 매각가)
-    POST /pipeline                — Agent 1→2→3 게이트 파이프라인 (+ 선택적 Claude 종합)
+    POST /pipeline                — Agent 1→2→3 게이트 파이프라인 (+ 선택적 DeepSeek 종합)
     POST /report/pdf              — 매도 제안서 PDF 생성 (Agent 1→2→3 + 매입처 매칭 + PDF 렌더링)
     POST /report/pdf/full         — 이미 계산된 진단결과로 매입처 매칭+경제성까지 포함한 정식 PDF
     POST /report/pdf/from-view    — 화면에 뜬 값 그대로만 렌더링(매입처 매칭/경제성 없음, 단순 버전)
@@ -156,7 +156,7 @@ class PipelineRequest(BaseModel):
     capacity_kwh: float = Field(64.0, gt=0)
     question: str = ""
     include_report: bool = Field(
-        True, description="False로 주면 Claude 종합 호출을 건너뛰고 Agent1~3 "
+        True, description="False로 주면 DeepSeek 종합 호출을 건너뛰고 Agent1~3 "
                           "수치만 즉시 반환합니다(지연시간 없음, API 키 불필요).")
 
 
@@ -168,7 +168,7 @@ def health():
     return {
         "status": "ok",
         "loaded_models": ["rul_model", "reuse_model", "fire_risk_model"],
-        "anthropic_key_configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "deepseek_key_configured": bool(os.environ.get("DEEPSEEK_API_KEY_NH")),
     }
 
 
@@ -212,18 +212,18 @@ def value_assessor(sensor_values: SensorValues, grade: str, capacity_kwh: float 
 def pipeline(req: PipelineRequest):
     """Agent1→2→3 게이트 파이프라인 전체 실행.
 
-    include_report=False면 Claude를 호출하지 않고 세 에이전트의 수치만 반환한다
+    include_report=False면 DeepSeek를 호출하지 않고 세 에이전트의 수치만 반환한다
     (백엔드에서 EV 재제조/ESS 재사용 가능 여부를 즉시 판단하는 용도로 적합).
-    include_report=True면 마지막에 Claude가 자연어 리포트까지 작성한다
-    (서버 환경변수 ANTHROPIC_API_KEY 필요).
+    include_report=True면 마지막에 DeepSeek이 자연어 리포트까지 작성한다
+    (서버 환경변수 DEEPSEEK_API_KEY_NH 필요).
     """
-    if req.include_report and not os.environ.get("ANTHROPIC_API_KEY"):
+    if req.include_report and not os.environ.get("DEEPSEEK_API_KEY_NH"):
         raise HTTPException(
-            500, "ANTHROPIC_API_KEY가 서버에 설정되지 않았습니다. "
+            500, "DEEPSEEK_API_KEY_NH가 서버에 설정되지 않았습니다. "
                 "include_report=false로 요청하거나 서버 환경변수를 설정하세요.")
 
     if not req.include_report:
-        # Claude 호출 없이 결정론적 3단계만 실행 — 빠르고 API 키도 불필요
+        # DeepSeek 호출 없이 결정론적 3단계만 실행 — 빠르고 API 키도 불필요
         feat = _derive_features(req.sensor_values.model_dump())
         agent1 = PIPE.run_agent1_safety_guard(
             req.fire_values.model_dump(),
@@ -254,7 +254,7 @@ def pipeline(req: PipelineRequest):
             capacity_kwh=req.capacity_kwh,
             models=_MODELS,
             question=req.question,
-            api_key=None,  # 서버 환경변수 ANTHROPIC_API_KEY 사용
+            api_key=None,  # 서버 환경변수 DEEPSEEK_API_KEY_NH 사용
         )
     except RuntimeError as e:
         raise HTTPException(500, str(e))
@@ -356,7 +356,7 @@ class ErdDiagnoseRequest(BaseModel):
 
 @app.post("/diagnose/erd")
 def diagnose_erd(req: ErdDiagnoseRequest):
-    """Agent1→2→3을 실행하고(Claude 종합 없이) ERD 컬럼명에 맞춰 반환한다.
+    """Agent1→2→3을 실행하고(DeepSeek 종합 없이) ERD 컬럼명에 맞춰 반환한다.
 
     반환 필드는 BATTERY_PASSPORT의 battery_level/reuse_status/grade_detail/
     reliability_score/rul, BATTERY_DIAGNOSIS_METRICS의 4개 점수와 대응된다.
@@ -369,9 +369,6 @@ def diagnose_erd(req: ErdDiagnoseRequest):
     2. `reuse_status`는 등급→상태 3단계 매핑(1등급=양호/2등급=노후/3등급=수명말기)의
        임시 규칙이다. 실제 운영 기준이 확정되면 이 매핑만 바꾸면 된다.
     """
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pass  # 이 엔드포인트는 Claude를 호출하지 않으므로 키 없어도 됨
-
     feat = _derive_features(req.sensor_values.model_dump())
     agent1 = PIPE.run_agent1_safety_guard(
         req.fire_values.model_dump(),
@@ -581,7 +578,7 @@ def buyers_live_offers(req: LiveOffersRequest):
 
 # ------------------------------------------------------------------
 # 엑셀 일괄 업로드 — 관리자가 여러 배터리 행을 한 번에 올려 파이프라인을 돌린다.
-#   Claude 호출(리포트 작성)은 하지 않는다 — 수백 행을 한 번에 처리할 수 있으므로
+#   DeepSeek 호출(리포트 작성)은 하지 않는다 — 수백 행을 한 번에 처리할 수 있으므로
 #   행마다 LLM을 부르면 느리고 비용도 크다. Agent1~3 수치만 원본 표에 붙여 반환한다.
 #   개별 행의 자연어 리포트가 필요하면 그 행만 /pipeline 으로 다시 호출하면 된다.
 # ------------------------------------------------------------------

@@ -15,15 +15,19 @@
   Agent 3: Value Assessor  (rul_model + valuation.py)
        │  잔여수명 예측 & 매각가 산정
        ▼
-  Claude 종합 — 세 에이전트의 결과를 하나의 진단 리포트로 작성
+  DeepSeek 종합 — 세 에이전트의 결과를 하나의 진단 리포트로 작성
 
 ⚠️ 판별(Agent1~3)은 전부 결정론적 코드다. LLM 호출은 마지막 종합 1회뿐이라
    같은 입력이면 등급·가격은 항상 같고, 리포트 문장만 매번 자연어로 생성된다.
+   비용 때문에(buyer_lookup.py와 같은 이유) 종합 리포트도 Claude 대신 DeepSeek을 쓴다.
 """
 import os
 import json
 
 import numpy as np
+import requests
+
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 
 def _fire_defaults_and_features(fire_bundle, fire_defaults):
@@ -126,7 +130,7 @@ Agent 1/2/3 각각의 핵심 수치를 표나 목록으로 제시합니다.
 def run_pipeline(sensor_values: dict, fire_values: dict, capacity_kwh: float,
                  *, models: dict, question: str = "",
                  api_key: str | None = None) -> dict:
-    """3-Agent 게이트 파이프라인 실행 + Claude 종합 리포트 생성.
+    """3-Agent 게이트 파이프라인 실행 + DeepSeek 종합 리포트 생성.
 
     Args:
         sensor_values: RUL/SOH 판별용 7개 원본 센서값
@@ -136,7 +140,7 @@ def run_pipeline(sensor_values: dict, fire_values: dict, capacity_kwh: float,
                  "fire_defaults", "reuse_model", "reuse_features", "rul_model",
                  "rul_features", "valuation_mod", "compute_indicators"} 를 담은 dict
         question: 사용자 추가 질문(선택)
-        api_key: Anthropic API 키. None이면 환경변수 사용.
+        api_key: DeepSeek API 키. None이면 환경변수 사용.
     Returns:
         {"agent1", "agent2"(optional), "agent3"(optional), "report", "stopped_at"}
     """
@@ -185,15 +189,13 @@ def run_pipeline(sensor_values: dict, fire_values: dict, capacity_kwh: float,
     )
     result["agent3"] = agent3
 
-    # ---- Claude 1회 호출 — 세 에이전트 결과를 종합해 리포트 작성 ----
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    # ---- DeepSeek 1회 호출 — 세 에이전트 결과를 종합해 리포트 작성 ----
+    key = api_key or os.environ.get("DEEPSEEK_API_KEY_NH")
     if not key:
         raise RuntimeError(
-            "Anthropic API 키가 없습니다. 환경변수 ANTHROPIC_API_KEY를 설정하거나 "
+            "DeepSeek API 키가 없습니다. 환경변수 DEEPSEEK_API_KEY_NH를 설정하거나 "
             "대시보드에서 키를 입력하세요."
         )
-    import anthropic
-    client = anthropic.Anthropic(api_key=key)
 
     payload = json.dumps({"agent1": agent1, "agent2": agent2, "agent3": agent3},
                          ensure_ascii=False, indent=2)
@@ -201,14 +203,21 @@ def run_pipeline(sensor_values: dict, fire_values: dict, capacity_kwh: float,
     if question.strip():
         user_msg += f"\n\n[추가 질문]\n{question.strip()}"
 
-    resp = client.beta.messages.create(
-        model="claude-opus-4-8",
-        max_tokens=8000,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
-        system=SYSTEM,
-        messages=[{"role": "user", "content": user_msg}],
+    resp = requests.post(
+        DEEPSEEK_URL,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+            "max_tokens": 2000,
+            "temperature": 0.3,
+        },
+        timeout=30,
     )
-    text = "\n".join(b.text for b in resp.content if b.type == "text")
-    result["report"] = text.strip()
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"].strip()
+    result["report"] = text
     return result

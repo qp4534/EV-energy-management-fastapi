@@ -19,7 +19,7 @@
 pip install -r requirements.txt
 uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
 ```
-`ANTHROPIC_API_KEY` 환경변수는 `/pipeline`에서 `include_report=true`일 때만 필요(종합 리포트 생성용). `/diagnose/erd`, `/agents/*`, `include_report=false`인 `/pipeline`은 키 없이 동작한다.
+`DEEPSEEK_API_KEY_NH` 환경변수는 `/pipeline`에서 `include_report=true`일 때만 필요(종합 리포트 생성용). `/diagnose/erd`, `/agents/*`, `include_report=false`인 `/pipeline`은 키 없이 동작한다.
 
 ## 다른 서비스에서 호출하기 (메인 백엔드 연동)
 모델 바이너리를 매 배포마다 옮기지 않으려면, 이 서비스를 독립적으로 띄워두고 메인 백엔드는 URL만 알면 된다.
@@ -30,7 +30,7 @@ uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
 ## 엔드포인트
 - `GET /health`
 - `POST /agents/safety-guard` / `/agents/status-classifier` / `/agents/value-assessor` — 에이전트 단독 호출
-- `POST /pipeline` — 3단계 게이트 파이프라인 (+선택적 Claude 종합 리포트)
+- `POST /pipeline` — 3단계 게이트 파이프라인 (+선택적 DeepSeek 종합 리포트)
 - `POST /pipeline/batch-excel` — 엑셀 일괄 진단
 - **`POST /diagnose/erd`** — 위 파이프라인을 실행하고 **ERD 컬럼명**(`battery_level`, `reuse_status`, `grade_detail`, `reliability_score`, `rul`, `remaining_life_score`, `discharge_power_score`, `charge_health_score`, `voltage_stability_score`)으로 매핑해서 반환. `BATTERY_PASSPORT`/`BATTERY_DIAGNOSIS_METRICS` 테이블에 바로 적재하기 위한 용도. 응답 안에 스케일/매핑 관련 주의사항이 같이 내려가니 백엔드팀과 한 번 맞춰볼 것.
 - **`POST /report/pdf`** — 배터리 매도 제안서 PDF를 생성해 그대로 스트리밍 반환(`application/pdf`). Agent1~3을 실행한 뒤 `valuation.estimate_offers()`로 매입처를 매칭하고(`buyer_index`로 순위 선택, 기본 0 = 최고 제안가), `economics.compute()`로 경제성·탄소 절감을 계산해 `pdf_report.build_pdf()`로 렌더링한다. 화재 위험 게이트에 걸리면 제안서를 만들지 않고 409를 반환한다.
