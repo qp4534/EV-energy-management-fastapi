@@ -6,6 +6,9 @@ from enum import StrEnum
 class ChatRoute(StrEnum):
     EMERGENCY = "EMERGENCY"
     VEHICLE_STATUS = "VEHICLE_STATUS"
+    ADMIN_DATA = "ADMIN_DATA"
+    OPERATOR_DATA = "OPERATOR_DATA"
+    DATA_QUERY = "DATA_QUERY"
     LEGAL = "LEGAL"
     RAG = "RAG"
     GENERAL = "GENERAL"

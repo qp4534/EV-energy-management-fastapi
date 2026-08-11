@@ -9,6 +9,15 @@ from typing import Any
 from app.ai.config import AISettings
 from app.ai.contracts import RagRetriever, RetrievedChunk, TextGenerator, VehicleStateProvider
 
+from .data_queries import (
+    ActorRole,
+    ChatDataProvider,
+    ChatDataResult,
+    DataQueryKind,
+    DataQuerySpec,
+    detect_data_query,
+    normalize_actor_role,
+)
 from .schemas import ChatMessageRequest, ChatMessageResponse, SourceCitation
 from .supervisor import ChatRoute, ChatSupervisor
 
@@ -35,6 +44,25 @@ _GENERAL_SYSTEM = """당신은 전기차 서비스의 일반 안내 챗봇이다
 법령 준수 여부를 추측하지 말고 해당 질문에는 확인 가능한 데이터나 공식 근거가
 필요하다고 안내하라.
 """
+_DATA_SYSTEM = """당신은 전기차 에너지 관리 서비스의 운영 데이터 요약 도우미다.
+아래 원칙을 반드시 지켜라.
+- 제공된 조회 결과 JSON에 있는 사실만 사용한다.
+- 개수, 비율, 날짜, 단위, 위험등급을 변경하거나 새로 계산해 만들지 않는다.
+- 조회 결과가 0이거나 null이면 그대로 설명하고 추측하지 않는다.
+- 차량 UUID 등 내부 식별자는 꼭 필요한 경우가 아니면 답변에 나열하지 않는다.
+- 데이터 기준 시각과 조회 기간을 짧게 명시한다.
+- 사용한 데이터 종류를 답변 끝에 짧게 표시한다.
+- 한국어로 간결하게 답한다.
+"""
+
+_DATA_SOURCE_TITLES = {
+    "CAR": "프로젝트 DB · 차량 정보",
+    "TWIN_FRAMES": "프로젝트 DB · 디지털 트윈 측정값",
+    "ANOMALY_LOGS": "프로젝트 DB · 이상 탐지 로그",
+    "ai_report_jobs": "프로젝트 DB · AI 보고서 작업",
+    "BATTERY_PASSPORT": "프로젝트 DB · 배터리 여권",
+    "CHARGING_SESSION": "프로젝트 DB · 충전 세션",
+}
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -125,6 +153,72 @@ def _vehicle_summary(state: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in summary.items() if value is not None}
 
 
+def _data_safety_level(result: ChatDataResult) -> str:
+    if result.kind != DataQueryKind.RISK_OVERVIEW:
+        return "NORMAL"
+    if int(result.data.get("emergency") or 0) > 0:
+        return "EMERGENCY"
+    if int(result.data.get("warning") or 0) > 0:
+        return "WARNING"
+    if int(result.data.get("caution") or 0) > 0:
+        return "CAUTION"
+    return "NORMAL"
+
+
+def _data_citations(result: ChatDataResult) -> list[SourceCitation]:
+    return [
+        SourceCitation(
+            chunk_id=f"db:{table}",
+            title=_DATA_SOURCE_TITLES.get(table, f"프로젝트 DB · {table}"),
+            source_type="project_database",
+            score=1.0,
+        )
+        for table in result.source_tables
+    ]
+
+
+def _data_fallback(result: ChatDataResult) -> str:
+    data = result.data
+    if result.kind == DataQueryKind.RISK_OVERVIEW:
+        answer = (
+            f"전체 차량 {data['totalVehicles']}대 중 Twin 데이터가 있는 차량은 "
+            f"{data['vehiclesWithTwin']}대이고, 5분 이내 데이터는 "
+            f"{data['freshVehicles']}대입니다. 정상 {data['normal']}대, "
+            f"주의 {data['caution']}대, 경고 {data['warning']}대, "
+            f"긴급 {data['emergency']}대이며 확인 불가는 {data['unknown']}대입니다."
+        )
+        if int(data.get("staleVehicles") or 0) > 0:
+            answer += f" 이 중 {data['staleVehicles']}대의 최신 데이터는 5분보다 오래됐습니다."
+        return answer
+    if result.kind == DataQueryKind.ANOMALY_SUMMARY:
+        levels = data["byRiskLevel"]
+        return (
+            f"조회 기간의 이상 이벤트는 총 {data['totalEvents']}건이며 영향 차량은 "
+            f"{data['affectedVehicles']}대입니다. 정상 {levels['정상']}건, "
+            f"주의 {levels['주의']}건, 경고 {levels['경고']}건, "
+            f"긴급 {levels['긴급']}건입니다."
+        )
+    if result.kind == DataQueryKind.REPORT_JOB_STATUS:
+        statuses = data["byStatus"]
+        return (
+            f"최근 보고서 작업은 총 {data['totalJobs']}건입니다. 완료 "
+            f"{statuses['COMPLETED']}건, 실행 중 {statuses['RUNNING']}건, "
+            f"대기 {statuses['PENDING']}건, 실패 {statuses['FAILED']}건입니다."
+        )
+    if result.kind == DataQueryKind.LOW_SOH_BATTERIES:
+        return (
+            f"SOH {data['thresholdPercent']:g}% 미만 배터리는 "
+            f"{data['batteryCount']}개입니다."
+        )
+    if result.kind == DataQueryKind.CHARGING_SUMMARY:
+        return (
+            f"조회 기간에 충전 세션은 총 {data['totalSessions']}회이고, "
+            f"완료된 세션은 {data['completedSessions']}회입니다. "
+            f"측정 가능한 총 충전 시간은 {data['totalChargingHours']:.1f}시간입니다."
+        )
+    return "조회 결과를 확인했습니다."
+
+
 class ChatbotService:
     def __init__(
         self,
@@ -134,16 +228,21 @@ class ChatbotService:
         vehicle_state: VehicleStateProvider,
         settings: AISettings,
         *,
+        data_provider: ChatDataProvider | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.supervisor = supervisor
         self.rag = rag
         self.generator = generator
         self.vehicle_state = vehicle_state
+        self.data_provider = data_provider
         self.settings = settings
         self.now = now or (lambda: datetime.now(timezone.utc))
 
     async def answer(self, request: ChatMessageRequest) -> ChatMessageResponse:
+        data_query = detect_data_query(request.message, now=self.now())
+        if data_query is not None:
+            return await self._project_data(request, data_query)
         route = self.supervisor.classify(request.message)
         if route == ChatRoute.EMERGENCY:
             return await self._emergency(request.message)
@@ -154,6 +253,93 @@ class ChatbotService:
         if route == ChatRoute.GENERAL:
             return await self._general(request.message)
         return await self._grounded_answer(request.message, ChatRoute.RAG)
+
+    async def _project_data(
+        self,
+        request: ChatMessageRequest,
+        spec: DataQuerySpec,
+    ) -> ChatMessageResponse:
+        actor_role = normalize_actor_role(request.actor_role)
+        if actor_role == ActorRole.ADMIN:
+            route = ChatRoute.ADMIN_DATA
+        elif actor_role == ActorRole.OPERATOR:
+            route = ChatRoute.OPERATOR_DATA
+        else:
+            return ChatMessageResponse(
+                answer="이 운영 데이터는 관리자 또는 관제자 권한으로 로그인해야 조회할 수 있습니다.",
+                route=ChatRoute.DATA_QUERY.value,
+                safety_level="UNKNOWN",
+                missing_fields=["authorizedRole"],
+                metadata={"dataQuery": {"kind": spec.kind.value}},
+            )
+
+        if not request.user_id:
+            return ChatMessageResponse(
+                answer="로그인 사용자 정보를 확인할 수 없어 운영 데이터를 조회할 수 없습니다.",
+                route=route.value,
+                safety_level="UNKNOWN",
+                missing_fields=["authenticatedUser"],
+                metadata={"dataQuery": {"kind": spec.kind.value}},
+            )
+
+        if self.data_provider is None:
+            return ChatMessageResponse(
+                answer="현재 프로젝트 데이터 조회 기능을 사용할 수 없습니다.",
+                route=route.value,
+                safety_level="UNKNOWN",
+                missing_fields=["dataProvider"],
+                metadata={"dataQuery": {"kind": spec.kind.value}},
+            )
+
+        try:
+            result = await self.data_provider.fetch(spec)
+        except Exception:
+            LOGGER.exception("Project data query failed for kind=%s", spec.kind.value)
+            return ChatMessageResponse(
+                answer="프로젝트 데이터를 조회하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+                route=route.value,
+                safety_level="UNKNOWN",
+                missing_fields=["database"],
+                metadata={"dataQuery": {"kind": spec.kind.value}},
+            )
+
+        payload = {
+            "kind": result.kind.value,
+            "role": actor_role.value,
+            "filters": result.filters,
+            "dataAsOf": result.data_as_of.isoformat(),
+            "sourceTables": list(result.source_tables),
+            "result": result.data,
+        }
+        answer = (
+            _data_fallback(result)
+            + f" 데이터 기준 시각은 {result.data_as_of.isoformat()}입니다."
+        )
+        missing: list[str] = []
+        fallback_used = False
+        try:
+            answer = await self.generator.generate(
+                _DATA_SYSTEM,
+                "질문:\n"
+                + request.message
+                + "\n\n조회 결과 JSON:\n"
+                + json.dumps(payload, ensure_ascii=False),
+                purpose="chat",
+            )
+        except Exception:
+            missing.append("languageModel")
+            fallback_used = True
+
+        return ChatMessageResponse(
+            answer=answer,
+            route=route.value,
+            safety_level=_data_safety_level(result),
+            data_as_of=result.data_as_of,
+            sources=_data_citations(result),
+            missing_fields=missing,
+            fallback_used=fallback_used,
+            metadata={"dataQuery": payload},
+        )
 
     async def _search(self, query: str, route: ChatRoute) -> tuple[list[RetrievedChunk], bool]:
         try:

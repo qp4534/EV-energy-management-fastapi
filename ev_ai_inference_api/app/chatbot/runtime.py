@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.ai.config import AISettings
 from app.ai.deepseek import DeepSeekClient
+from app.chatbot.data_repository import PostgresChatDataRepository
 from app.chatbot.service import ChatbotService
 from app.chatbot.supervisor import ChatSupervisor
 from app.chatbot.vehicle_client import InferenceVehicleStateClient
@@ -62,6 +63,7 @@ def create_ai_runtime(
         batch_size=settings.embedding_batch_size,
     )
     rag = PostgresRagRepository(sessions, embedder, settings)
+    chat_data = PostgresChatDataRepository(sessions)
     deepseek = DeepSeekClient(settings)
     vehicle_client = InferenceVehicleStateClient(
         settings.inference_base_url,
@@ -74,6 +76,7 @@ def create_ai_runtime(
         deepseek,
         vehicle_client,
         settings,
+        data_provider=chat_data,
     )
     report_repository = PostgresReportRepository(sessions)
     report_service = ReportGenerationService(report_repository, rag, deepseek)

@@ -22,6 +22,7 @@ class ApiModel(BaseModel):
 class ChatMessageRequest(ApiModel):
     message: str = Field(min_length=1, max_length=4_000)
     user_id: str | None = Field(default=None, max_length=128)
+    actor_role: str | None = Field(default=None, max_length=32)
     vehicle_id: str | None = Field(default=None, max_length=128)
     conversation_id: str | None = Field(default=None, max_length=128)
 
