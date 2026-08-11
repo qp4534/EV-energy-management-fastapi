@@ -26,10 +26,6 @@
 `apps/{rul-diagnosis,charging-demand,fastapi-eks}/deployment.yaml` 이미지 태그를 갱신하면
 ArgoCD가 자동 반영한다.
 
-## 브랜치 규칙
-
-작업은 `dev_nh`(개인 브랜치)에서 커밋 → 확인 후 `main`에 병합 → CI가 자동 배포.
-
 ---
 
 ## ev_ai_inference_api — BMS 현재 상태 분류 API
