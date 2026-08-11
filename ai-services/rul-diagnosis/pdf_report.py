@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""매도 제안서 PDF 생성 — 정부 부처 보도자료 스타일
+"""매도 제안서 PDF 생성 — 공식 문서 스타일
 
 디자인 기준
 - 상단: "MijungE" 로고 lockup + 헤드라인 타이틀 + 문서정보 표(우측, 담당자 연락처 포함).
@@ -40,11 +40,11 @@ from reportlab.platypus import (BaseDocTemplate, Frame, PageTemplate, Paragraph,
 NAVY = colors.HexColor("#002C5F")      # 포인트 색(로고/구분선/강조 숫자 박스 전용 - 배경 채움엔 안 씀)
 NAVY_LT = colors.HexColor("#0B4A8F")
 GRAY_BG = colors.HexColor("#F4F6F8")
-GRAY_HEADER = colors.HexColor("#EAEAEA")  # 표 헤더 배경(정부 보도자료 스타일)
+GRAY_HEADER = colors.HexColor("#EAEAEA")  # 표 헤더 배경(공식 문서 톤)
 GRAY_LINE = colors.HexColor("#D5DBE1")
 GRAY_TXT = colors.HexColor("#5A6672")
 INK = colors.HexColor("#1A1A1A")          # 표 헤더/헤드라인용 검정에 가까운 잉크색
-# 강조 색(하늘색/시안색 계열)은 쓰지 않는다 - 정부 보도자료·기업 공문 톤에 맞춰 링크·
+# 강조 색(하늘색/시안색 계열)은 쓰지 않는다 - 공식 문서 톤에 맞춰 링크·
 # 헤더 모두 무채색 계열로 통일한다.
 
 # ---------------- 담당자 정보 (헤더 문서정보 표에 노출) ----------------
@@ -111,8 +111,8 @@ def _styles():
 
 
 def _link_html(url: str, label: str) -> str:
-    """reportlab Paragraph 안에서 클릭 가능한 하이퍼링크로 렌더링되는 XML 조각. 정부
-    보도자료·기업 공문 톤에 맞춰 색으로 강조하지 않고, 본문과 같은 크기의 진회색 밑줄
+    """reportlab Paragraph 안에서 클릭 가능한 하이퍼링크로 렌더링되는 XML 조각. 공식
+    문서 톤에 맞춰 색으로 강조하지 않고, 본문과 같은 크기의 진회색 밑줄
     텍스트로 표시한다."""
     if not url:
         return ""
@@ -120,7 +120,7 @@ def _link_html(url: str, label: str) -> str:
 
 
 def _kv_table(rows, widths, st, header=None):
-    """라벨-값 표. header가 있으면 옅은 회색 헤더행 추가(정부 보도자료 스타일 - 색 배경 대신
+    """라벨-값 표. header가 있으면 옅은 회색 헤더행 추가(공식 문서 톤 - 색 배경 대신
     회색+검정 굵은 글씨로 강조)."""
     data = []
     if header:
@@ -152,7 +152,7 @@ def _kv_table(rows, widths, st, header=None):
 
 def _section_title(num: int, title: str, st):
     """"N. 제목" 형식. 원문자나 박스형 강조 없이 순수 숫자 목록("1." "2." ...)으로
-    통일해 정부 보도자료·공문 톤의 절제된 섹션 구분을 유지한다."""
+    통일해 공식 문서 톤의 절제된 섹션 구분을 유지한다."""
     return Paragraph(f"{num}.　<b>{title}</b>",
                      ParagraphStyle("sectitle", parent=st["sec"], spaceAfter=6))
 
@@ -168,7 +168,7 @@ def _bullet_gap(text: str) -> str:
 
 
 def _gov_bullets(items, st):
-    """정부 보도자료 스타일 개조식 불릿. items는 (level, text) 리스트 -
+    """공식 문서 톤의 개조식 불릿. items는 (level, text) 리스트 -
     level 0='□'(요지), level 1='-'(부연설명, 들여쓰기). 부연설명은 대시(-)로 표시한다 -
     숫자를 쓰면 "1. 2. 3." 목록(extra_reasons 등 별도 번호 목록)과 헷갈릴 수 있어
     여기는 대시를 쓴다."""
@@ -184,7 +184,7 @@ def _gov_bullets(items, st):
 
 
 def _headline_summary(items, st):
-    """교육부 등 정부 보도자료 1페이지 상단에 오는 "주요 내용" - 표(라벨:값)가 아니라
+    """공문서 1페이지 상단에 오는 "주요 내용" - 표(라벨:값)가 아니라
     □(요지 문장)/ㅇ(부연) 개조식 서술형 요약. 수신 정보 바로 다음, 문서 맨 위에 위치시켜
     본문을 읽지 않고도 제안 핵심(누구에게·무엇을·얼마에)이 한눈에 들어오게 한다.
     items는 _gov_bullets와 같은 (level, text) 리스트."""
@@ -391,8 +391,8 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
     ], [28 * mm, CW - 28 * mm], st))
     S.append(Spacer(1, 6 * mm))
 
-    # ── 주요 내용 요약 (교육부 등 정부 보도자료 1페이지 스타일 - □(대분류)마다 ㅇ 여러 줄인
-    # 실제 보도자료 구조를 따라 매도 개요/AI 진단/제안 가격/매입처 적합성 4개 블록으로 확장)
+    # ── 주요 내용 요약 (공문서 1페이지 상단 요약 스타일 - □(대분류)마다 ㅇ 여러 줄인
+    # 구조를 따라 매도 개요/AI 진단/제안 가격/매입처 적합성 4개 블록으로 확장)
     lo, hi = buyer["제안가_범위_원"]
     _why_gist = (buyer["왜"].split("\n")[0].lstrip("□").strip("　 ")
                 if buyer.get("왜") else "")
@@ -461,7 +461,7 @@ def build_pdf(*, buyer: dict, capacity_kwh: float, grade: str,
 
     # 등급 판정 기준 — SOH(추정 건강도) + 전압 안정성 지표를 함께 보고
     # 매도 경로 상한(재사용/2차사용/재활용)을 정하는 기준을 명시한다.
-    # 정부 보도자료 스타일 □/ㅇ 개조식으로 항목을 잘게 쪼갠다(2026-08 개편).
+    # 공식 문서 톤의 □/ㅇ 개조식으로 항목을 잘게 쪼갠다(2026-08 개편).
     # KeepTogether로 묶어 표가 페이지 경계에서 잘리지 않게 한다.
     S.append(KeepTogether([
         Paragraph("등급 판정 기준", st["cellb"]),
@@ -689,8 +689,8 @@ def build_pdf_from_view(*, buyer_name: str = "매입 희망 기업", buyer_role:
     ], [28 * mm, CW - 28 * mm], st))
     S.append(Spacer(1, 6 * mm))
 
-    # ── 주요 내용 요약 (교육부 등 정부 보도자료 1페이지 스타일 - □(대분류)마다 ㅇ 여러 줄인
-    # 실제 보도자료 구조를 따라 매도 개요/AI 진단/제안 가격/귀사 적합성 4개 블록으로 확장)
+    # ── 주요 내용 요약 (공문서 1페이지 상단 요약 스타일 - □(대분류)마다 ㅇ 여러 줄인
+    # 구조를 따라 매도 개요/AI 진단/제안 가격/귀사 적합성 4개 블록으로 확장)
     _reasons_gist = (reasons[0].split("\n")[0].lstrip("□○-").strip("　 ")
                     if reasons else "")
     S.append(_headline_summary([
