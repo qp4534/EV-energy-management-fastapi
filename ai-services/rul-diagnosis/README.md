@@ -2,6 +2,20 @@
 
 7개 센서값(방전/충전 특성)과 8개 화재 센서값을 입력받아 3단계 에이전트(화재 위험 게이트 → SOH 등급 → 잔여수명/매각가)를 실행하는 독립 FastAPI 서비스.
 
+## `fire_risk_model`과 `ev_ai_inference_api`의 차이
+둘 다 열폭주 위험을 예측하지만 같은 걸 두 번 만든 게 아니다. 요구하는 입력 자체가 겹치지 않아서 하나로 합칠 수 없다.
+
+| | `fire_risk_model` | `ev_ai_inference_api` |
+|---|---|---|
+| 목적 | 매도 제안서 파이프라인의 1회성 안전 게이트 — 진단을 계속 진행해도 되는지만 판정 | 주행 중인 실제 차량의 실시간 관제 대시보드 |
+| 입력 | 전압·온도·압력·열화상온도·가스 8종(CH4/CO/CO2/HCN/HCl/HF/N2O/NO/NO2/SO2) 등 30개 — 실험실/진단 장비로만 계측 가능 | `voltage_v`, `temp_mean_c`, `temp_max_c`, `temp_delta_c`, `temp_saturation_fraction/all` — 양산차 BMS가 실시간으로 주는 값만 |
+| 호출 방식 | 센서값 스냅샷 1개(dict) → 1회 판정, 상태 없음 | 차량별 세션 유지, 1Hz 연속 스트림, TTL 900초 |
+| 모델 | RandomForestClassifier(n_estimators=300) 2개 — 6단계(`tr_stage` 1~6) 분류 + 이진(stage≥4) 위험판정 | Hybrid HistGradientBoosting — 4단계(정상/주의/경고/긴급) 분류 |
+| 학습 데이터 | AIHub 열폭주 실험 데이터, `experiment_id` 단위 GroupShuffleSplit(75/25)로 정보 누설 차단 | `ev_ai_inference_api/README.md` 참고 |
+| 성능 (테스트 56,396행) | 6단계 정확도 92.4%/macro-F1 85.8%, 이진판정 ROC-AUC 0.992/Recall 89.1% (운영 임계값은 70%로 보수적 설정) | 긴급 단계 Recall 약 96% |
+
+주행 중인 차량에서는 가스 농도나 열화상을 실시간으로 뽑을 방법이 없어서 `ev_ai_inference_api`를 이 파이프라인에 그대로 재사용할 수 없다. 반대로 `fire_risk_model`이 요구하는 실험실 수준 센서값은 양산차 BMS에서 얻을 수 없다.
+
 ## 모델 파일 준비 (중요)
 이 디렉터리에는 `reuse_model.joblib`(14MB)만 포함되어 있다. 아래 두 파일은 **GitHub 100MB 제한을 넘어 저장소에 커밋하지 않았다** (`.gitignore` 처리됨):
 
