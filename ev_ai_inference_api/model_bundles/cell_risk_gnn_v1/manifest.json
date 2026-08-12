@@ -1,0 +1,49 @@
+{
+  "model_id": "cell-risk-graphsage-v1",
+  "architecture": "two-layer GraphSAGE node classifier",
+  "task": "current 96-cell risk classification",
+  "future_prediction": false,
+  "feature_names": [
+    "temperature_absolute",
+    "temperature_delta",
+    "voltage_absolute",
+    "voltage_delta",
+    "thermal_heat",
+    "hotspot_indicator",
+    "bms_risk_level",
+    "image_risk_level",
+    "image_confidence"
+  ],
+  "classes": [
+    "normal",
+    "caution",
+    "warning",
+    "danger"
+  ],
+  "layout_id": "generic_ev_concept_96_v1",
+  "training_source": "generated digital-twin scenario frames",
+  "thermal_signal_augmentation": "scenario-label-aligned image risk, confidence, and hotspot",
+  "training_scenarios": [
+    "battery_over_temp",
+    "battery_overheat_sign",
+    "cell_voltage_deviation",
+    "cell_voltage_imbalance",
+    "charging_current_fluctuation",
+    "connector_local_overheat",
+    "connector_temp_rise",
+    "normal",
+    "rapid_temp_rise",
+    "thermal_runaway_risk"
+  ],
+  "training_label_counts": {
+    "0": 1015438,
+    "1": 53728,
+    "2": 31980,
+    "3": 4774
+  },
+  "validation_macro_f1": 0.9886057952587218,
+  "minimum_risk_probability": 0.5,
+  "prototype_only": true,
+  "safety_authority": false,
+  "sha256": "0ef8d225cc267514c8420802899323379be3bb2153e5a0d6e161597bb527037a"
+}

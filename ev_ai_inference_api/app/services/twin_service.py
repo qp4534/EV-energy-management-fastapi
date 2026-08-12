@@ -23,6 +23,7 @@ from app.schemas.twins import (
 )
 
 from .current_stage_service import CurrentStageService
+from .cell_risk_gnn import CellRiskGNNAnalyzer
 from .thermal_inference import ThermalInferenceClient
 from .thermal_render import analyze_cell_heat_scores
 from .twin_fusion import fuse_twin_state
@@ -172,6 +173,7 @@ class TwinService:
         thermal_inference: ThermalInferenceClient | None = None,
         minimum_image_confidence: float = 0.70,
         anomaly_persistence: AnomalyPersistence | None = None,
+        cell_risk_analyzer: CellRiskGNNAnalyzer | None = None,
     ) -> None:
         self.current_stage = current_stage
         self.redis = redis_store
@@ -180,6 +182,7 @@ class TwinService:
         self.thermal_inference = thermal_inference or ThermalInferenceClient()
         self.minimum_image_confidence = minimum_image_confidence
         self.anomaly_persistence = anomaly_persistence
+        self.cell_risk_analyzer = cell_risk_analyzer or CellRiskGNNAnalyzer()
         self._locks: dict[str, asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
 
@@ -291,6 +294,7 @@ class TwinService:
                 thermal_frame_sha256=fused["thermal_frame_sha256"],
                 fusion_source=fused["fusion_source"],
             )
+            frame = self.cell_risk_analyzer.enrich_one(frame)
             if self.anomaly_persistence is not None and frame.final_risk_level > 0:
                 persistence_payload = model_request.model_copy(
                     update={
@@ -392,6 +396,7 @@ class TwinService:
         frames = await self.repository.history(
             session, incident, resolution_seconds
         )
+        frames = self.cell_risk_analyzer.enrich(frames)
         return TwinHistoryResponse(
             incident=summary,
             resolution_seconds=resolution_seconds,

@@ -11,6 +11,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Settings:
     bundle_dir: Path
+    cell_risk_gnn_dir: Path
     session_ttl_seconds: int = 900
     max_sessions: int = 1_000
     database_url: str = "postgresql+asyncpg://ev_app:ev_app@127.0.0.1:5433/ev_ai"
@@ -32,6 +33,11 @@ class Settings:
     @classmethod
     def load(cls) -> "Settings":
         default = Path(__file__).resolve().parents[2] / "model_bundles" / "current_stage_v1" / "ev_battery_safety_inference_v1"
+        default_cell_risk_gnn = (
+            Path(__file__).resolve().parents[2]
+            / "model_bundles"
+            / "cell_risk_gnn_v1"
+        )
         origins = tuple(
             origin.strip()
             for origin in os.getenv(
@@ -56,6 +62,9 @@ class Settings:
             raise ValueError("TWIN_REDIS_REQUIRED must be a boolean")
         settings = cls(
             bundle_dir=Path(os.getenv("MODEL_BUNDLE_DIR", default)).resolve(),
+            cell_risk_gnn_dir=Path(
+                os.getenv("CELL_RISK_GNN_DIR", default_cell_risk_gnn)
+            ).resolve(),
             session_ttl_seconds=int(os.getenv("SESSION_TTL_SECONDS", "900")),
             max_sessions=int(os.getenv("MAX_SESSIONS", "1000")),
             database_url=os.getenv(

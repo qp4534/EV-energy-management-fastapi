@@ -168,6 +168,12 @@ async def test_twin_contract_is_flat_and_enforces_layout_and_array_lengths() -> 
         "thermal_frame_ref",
         "thermal_frame_sha256",
         "fusion_source",
+        "twin_ai_model_id",
+        "twin_ai_status",
+        "cell_ai_risk_score",
+        "cell_ai_state_level",
+        "affected_cell_indices",
+        "heat_spread_direction",
     }
     assert value.layout_id == TWIN_LAYOUT_ID
     with pytest.raises(ValidationError, match="exactly 96"):

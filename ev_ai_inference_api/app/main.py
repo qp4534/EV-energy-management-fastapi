@@ -19,6 +19,7 @@ from app.db.anomaly_persistence import AnomalyPersistence
 from app.routers.current_stage import router
 from app.routers.twins import router as twins_router
 from app.services.current_stage_service import CurrentStageService
+from app.services.cell_risk_gnn import CellRiskGNNAnalyzer
 from app.services.thermal_inference import ThermalInferenceClient
 from app.services.twin_service import TwinService
 
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI):
             SessionManager(factory, settings.session_ttl_seconds, settings.max_sessions)
         )
         app.state.current_stage_service = current_stage_service
+        cell_risk_gnn = CellRiskGNNAnalyzer.from_bundle(
+            settings.cell_risk_gnn_dir
+        )
+        cell_risk_gnn.require_available()
+        app.state.cell_risk_gnn = cell_risk_gnn
+        app.state.cell_risk_gnn_ready = cell_risk_gnn.available
         engine, sessions = create_database(settings.database_url)
         redis = Redis.from_url(settings.redis_url, decode_responses=False)
         redis_store = TwinRedisStore(redis)
@@ -78,6 +85,7 @@ async def lifespan(app: FastAPI):
                 if settings.anomaly_persistence_enabled
                 else None
             ),
+            cell_risk_analyzer=cell_risk_gnn,
         )
         if settings.twin_infra_required:
             await redis_store.ping()

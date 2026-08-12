@@ -153,7 +153,11 @@ jobs:
           )
           with urllib.request.urlopen(request, timeout=15) as response:
               result = json.load(response)
-          if result["final_risk_level"] != 0 or result.get("anomaly_id") is not None:
+          if (
+              result["final_risk_level"] != 0
+              or result.get("anomaly_id") is not None
+              or result.get("twin_ai_status") != "ready"
+          ):
               raise RuntimeError(f"unexpected smoke response: {result}")
           print("FastAPI sample-path smoke test passed")
           PY
@@ -190,7 +194,11 @@ jobs:
                   result = json.load(response)
           except Exception as exc:
               raise RuntimeError(f"backend-namespace FastAPI call failed: {exc}") from exc
-          if result["final_risk_level"] != 0 or result.get("anomaly_id") is not None:
+          if (
+              result["final_risk_level"] != 0
+              or result.get("anomaly_id") is not None
+              or result.get("twin_ai_status") != "ready"
+          ):
               raise RuntimeError(f"unexpected smoke response: {result}")
           print("Backend namespace FastAPI service smoke test passed")
           PY

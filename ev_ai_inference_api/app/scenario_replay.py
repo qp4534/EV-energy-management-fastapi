@@ -32,6 +32,7 @@ from app.scenario_generator import (
     load_scenario_frames,
 )
 from app.schemas.twins import TwinFrame
+from app.services.cell_risk_gnn import CellRiskGNNAnalyzer
 
 
 _AWARE_DATETIME = TypeAdapter(datetime)
@@ -491,6 +492,7 @@ async def replay_scenarios(
     start_at: datetime,
     speed: float,
     duration_seconds: int | None = None,
+    cell_risk_analyzer: CellRiskGNNAnalyzer | None = None,
     _monotonic: Callable[[], float] | None = None,
     _sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> int:
@@ -511,14 +513,20 @@ async def replay_scenarios(
     loop_second = 0
     while duration_seconds is None or loop_second < duration_seconds:
         observed_at = start_at + timedelta(seconds=loop_second)
+        frames: list[TwinFrame] = []
         for assignment in assignments:
             dataset = datasets[assignment.scenario_id]
-            frame = dataset.frame_at(
-                loop_second + assignment.offset_seconds,
-                vehicle_id=assignment.vehicle_id,
-                observed_at=observed_at,
-                sequence=loop_second,
+            frames.append(
+                dataset.frame_at(
+                    loop_second + assignment.offset_seconds,
+                    vehicle_id=assignment.vehicle_id,
+                    observed_at=observed_at,
+                    sequence=loop_second,
+                )
             )
+        if cell_risk_analyzer is not None:
+            frames = cell_risk_analyzer.enrich(frames)
+        for frame in frames:
             await store.publish_live_only(frame)
         loop_second += 1
         if duration_seconds is not None and loop_second >= duration_seconds:
@@ -571,6 +579,10 @@ def parse_args() -> argparse.Namespace:
 
 async def _run_replay(args: argparse.Namespace) -> None:
     settings = Settings.load()
+    cell_risk_analyzer = CellRiskGNNAnalyzer.from_bundle(
+        settings.cell_risk_gnn_dir
+    )
+    cell_risk_analyzer.require_available()
     if args.s3_bucket:
         datasets = load_compact_datasets_from_s3(
             args.s3_bucket,
@@ -604,6 +616,7 @@ async def _run_replay(args: argparse.Namespace) -> None:
             start_at=start_at,
             speed=args.speed,
             duration_seconds=args.duration,
+            cell_risk_analyzer=cell_risk_analyzer,
         )
         print(
             f"replayed {count} logical seconds for {len(assignments)} vehicles"

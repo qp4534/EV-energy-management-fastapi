@@ -14,6 +14,20 @@ CELL_COUNT = 96
 CONNECTOR_COMPONENT_COUNT = 3
 MODULE_COUNT = 12
 
+HeatSpreadDirection = Literal[
+    "stable",
+    "localized",
+    "outward",
+    "front",
+    "rear",
+    "left",
+    "right",
+    "front-left",
+    "front-right",
+    "rear-left",
+    "rear-right",
+]
+
 SmallInt = Annotated[int, Field(strict=True, ge=-32_768, le=32_767)]
 StateLevel = Annotated[int, Field(strict=True, ge=0, le=3)]
 SequenceNumber = Annotated[int, Field(strict=True, ge=0)]
@@ -126,6 +140,12 @@ class TwinFrame(BaseModel):
     fusion_source: Literal[
         "sensor-only", "image+sensor", "physics", "image-unqualified"
     ] = "sensor-only"
+    twin_ai_model_id: str | None = None
+    twin_ai_status: Literal["ready", "unavailable"] = "unavailable"
+    cell_ai_risk_score: list[float] | None = None
+    cell_ai_state_level: list[StateLevel] | None = None
+    affected_cell_indices: list[int] = Field(default_factory=list)
+    heat_spread_direction: HeatSpreadDirection | None = None
 
     @field_validator("temperature_decic", "voltage_mv", "state_level")
     @classmethod
@@ -151,6 +171,46 @@ class TwinFrame(BaseModel):
             raise ValueError(
                 "cell_heat_score must contain 96 values between 0 and 1"
             )
+        return values
+
+    @field_validator("cell_ai_risk_score")
+    @classmethod
+    def validate_cell_ai_risk_score(
+        cls, values: list[float] | None
+    ) -> list[float] | None:
+        if values is None:
+            return None
+        if len(values) != CELL_COUNT or any(
+            not math.isfinite(value) or value < 0.0 or value > 1.0
+            for value in values
+        ):
+            raise ValueError(
+                "cell_ai_risk_score must contain 96 values between 0 and 1"
+            )
+        return values
+
+    @field_validator("cell_ai_state_level")
+    @classmethod
+    def validate_cell_ai_state_level(
+        cls, values: list[int] | None
+    ) -> list[int] | None:
+        if values is None:
+            return None
+        return _require_length(values, CELL_COUNT, "cell_ai_state_level")
+
+    @field_validator("affected_cell_indices")
+    @classmethod
+    def validate_affected_cell_indices(cls, values: list[int]) -> list[int]:
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value >= CELL_COUNT
+            for value in values
+        ):
+            raise ValueError("affected_cell_indices must contain cell indices 0-95")
+        if len(values) != len(set(values)):
+            raise ValueError("affected_cell_indices must not contain duplicates")
         return values
 
     @field_validator("image_probabilities")
