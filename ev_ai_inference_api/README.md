@@ -99,3 +99,11 @@ BMS 위험 단계, 열화상 AI의 위험 단계·신뢰도·핫스팟을 결합
 GitHub Actions를 선택하면 `.github/workflows/deploy.yml`에서 테스트 → `verify_bundle.py` → Docker build → ECR push → EKS update를 둡니다. CodePipeline을 선택하면 `buildspec.yml`/CodeBuild에서 동일한 순서를 둡니다. 이 저장소의 FastAPI 코드·Dockerfile·manifest는 어느 쪽도 전제하지 않으며, 실제 파이프라인과 AWS 리소스는 만들지 않습니다.
 
 향후 모델은 `routers/onset_180s.py`, `services/onset_180s_service.py`, `schemas/onset_180s.py`, `model_bundles/onset_180s_v1/`처럼 독립 수직 슬라이스로 추가합니다. thermal vision·SOH/RUL도 같은 방식이며, 현 작업에는 placeholder를 만들지 않았습니다.
+
+## Hybrid HGB 실제 추론 시연
+
+발표용 BMS 센서값을 Spring Backend 경유로 전송해 배포된 Hybrid HGB와
+Safety Fusion을 실제로 실행하는 절차는
+[`demo/bms_hgb/README_KO.md`](demo/bms_hgb/README_KO.md)에 정리되어 있습니다.
+이 시연은 RDS에 저장된 위험등급을 재생하지 않으며, 입력에 원본 단계 라벨을
+포함하지 않습니다.

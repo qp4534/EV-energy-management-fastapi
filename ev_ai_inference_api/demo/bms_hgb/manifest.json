@@ -1,0 +1,29 @@
+{
+  "dataset_id": "bms-hgb-demo-aihub-holdout-20250912005-v1",
+  "purpose": "time-compressed integration demonstration only",
+  "source": {
+    "dataset": "AI-Hub battery thermal-runaway controlled experiment CSV",
+    "experiment_id": "20250912005",
+    "locked_split": "test"
+  },
+  "rows": 250,
+  "logical_frequency_hz": 1,
+  "service_stage_source_counts": {
+    "normal": 120,
+    "caution": 50,
+    "warning": 50,
+    "emergency": 30
+  },
+  "adapter": {
+    "temperature": "48 cells use surface temperature and 48 cells use positive-terminal temperature; values are clipped to the deployed -40..150 C contract",
+    "voltage": "the AI-Hub cell voltage is repeated across 96 cells",
+    "connector_temperature": "ambient temperature is used to avoid inventing connector abuse",
+    "risk_labels_transmitted_to_backend": false
+  },
+  "limitations": [
+    "The 96-cell layout is a deterministic presentation adapter, not measured vehicle cell data.",
+    "Rows are evenly sampled within each service stage, so elapsed time is compressed.",
+    "The dataset must not be used as new validation evidence or a real-vehicle claim."
+  ],
+  "sha256": "43f5e456f44ca65cf70dfc265b01431618556c59352994cfffd58ecc6077d358"
+}
