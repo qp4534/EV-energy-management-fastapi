@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.session_manager import TimestampConflict
+from app.core.twin_auth import (
+    WEBSOCKET_PROTOCOL,
+    require_twin_read,
+    require_twin_service,
+    require_twin_websocket,
+)
 from app.schemas.twins import (
     IncidentListResponse,
     RiskVehicleListResponse,
@@ -31,6 +39,24 @@ def _service(request: Request):
     return service
 
 
+def _client_identity(connection, vehicle_id: str) -> str:
+    client = getattr(connection, "client", None)
+    host = getattr(client, "host", "unknown")
+    return f"{host}:{vehicle_id}"
+
+
+async def _limit(connection, scope: str, identity: str, limit: int) -> None:
+    limiter = getattr(connection.app.state, "twin_rate_limiter", None)
+    if limiter is None:
+        raise HTTPException(status_code=503, detail="Twin rate limiter unavailable")
+    await limiter.check(
+        scope,
+        identity,
+        limit=limit,
+        window_seconds=60,
+    )
+
+
 @router.post(
     "/vehicles/{vehicle_id}/samples",
     response_model=TwinFrame,
@@ -38,6 +64,9 @@ def _service(request: Request):
 async def create_sample(
     vehicle_id: str, payload: TwinSampleRequest, request: Request
 ) -> TwinFrame:
+    await _limit(request, "auth-attempt", _client_identity(request, "write"), 600)
+    require_twin_service(request)
+    await _limit(request, "write", _client_identity(request, vehicle_id), 180)
     try:
         return await _service(request).evaluate(vehicle_id, payload)
     except (TimestampConflict, TwinSequenceConflict) as exc:
@@ -60,6 +89,9 @@ async def create_observation(
 ) -> TwinFrame:
     """Evaluate one synchronized BMS sample and thermal image."""
 
+    await _limit(request, "auth-attempt", _client_identity(request, "write"), 600)
+    require_twin_service(request)
+    await _limit(request, "write", _client_identity(request, vehicle_id), 180)
     try:
         payload = TwinSampleRequest.model_validate_json(sample_json)
         if thermal_image.content_type not in {"image/png", "image/jpeg"}:
@@ -80,6 +112,9 @@ async def create_observation(
 
 @router.get("/risk-vehicles", response_model=RiskVehicleListResponse)
 async def risk_vehicles(request: Request) -> RiskVehicleListResponse:
+    await _limit(request, "auth-attempt", _client_identity(request, "fleet"), 600)
+    require_twin_service(request)
+    await _limit(request, "fleet-read", _client_identity(request, "fleet"), 60)
     try:
         return await _service(request).risk_vehicles()
     except (RedisError, OSError) as exc:
@@ -91,6 +126,14 @@ async def risk_vehicles(request: Request) -> RiskVehicleListResponse:
     response_model=TwinFrame,
 )
 async def latest(vehicle_id: str, request: Request) -> TwinFrame:
+    await _limit(request, "auth-attempt", _client_identity(request, vehicle_id), 600)
+    ticket = require_twin_read(request, vehicle_id)
+    await _limit(
+        request,
+        "read",
+        ticket.subject if ticket else _client_identity(request, vehicle_id),
+        180,
+    )
     try:
         return await _service(request).latest(vehicle_id)
     except InvalidVehicleId as exc:
@@ -112,6 +155,14 @@ async def latest_vehicle_measurement(
 ) -> TwinLatestMeasurement:
     """Return live Twin metrics for current UI displays such as a passport card."""
 
+    await _limit(request, "auth-attempt", _client_identity(request, vehicle_id), 600)
+    ticket = require_twin_read(request, vehicle_id)
+    await _limit(
+        request,
+        "read",
+        ticket.subject if ticket else _client_identity(request, vehicle_id),
+        180,
+    )
     try:
         frame = await _service(request).latest(vehicle_id)
         return latest_measurement(
@@ -131,6 +182,14 @@ async def latest_vehicle_measurement(
     response_model=IncidentListResponse,
 )
 async def incidents(vehicle_id: str, request: Request) -> IncidentListResponse:
+    await _limit(request, "auth-attempt", _client_identity(request, vehicle_id), 600)
+    ticket = require_twin_read(request, vehicle_id)
+    await _limit(
+        request,
+        "history",
+        ticket.subject if ticket else _client_identity(request, vehicle_id),
+        60,
+    )
     try:
         return await _service(request).incidents(vehicle_id)
     except InvalidVehicleId as exc:
@@ -148,6 +207,14 @@ async def latest_history(
     request: Request,
     resolution_seconds: int = Query(default=30, ge=1, le=3_600),
 ) -> TwinHistoryResponse:
+    await _limit(request, "auth-attempt", _client_identity(request, vehicle_id), 600)
+    ticket = require_twin_read(request, vehicle_id)
+    await _limit(
+        request,
+        "history",
+        ticket.subject if ticket else _client_identity(request, vehicle_id),
+        60,
+    )
     try:
         return await _service(request).latest_history(vehicle_id, resolution_seconds)
     except InvalidVehicleId as exc:
@@ -168,6 +235,14 @@ async def incident_history(
     request: Request,
     resolution_seconds: int = Query(default=30, ge=1, le=3_600),
 ) -> TwinHistoryResponse:
+    await _limit(request, "auth-attempt", _client_identity(request, vehicle_id), 600)
+    ticket = require_twin_read(request, vehicle_id)
+    await _limit(
+        request,
+        "history",
+        ticket.subject if ticket else _client_identity(request, vehicle_id),
+        60,
+    )
     try:
         return await _service(request).incident_history(
             vehicle_id, incident_id, resolution_seconds
@@ -186,9 +261,35 @@ async def live(vehicle_id: str, websocket: WebSocket) -> None:
     if service is None or not getattr(websocket.app.state, "twin_ready", False):
         await websocket.close(code=1013, reason="twin infrastructure is not ready")
         return
-    await websocket.accept()
+    try:
+        await _limit(
+            websocket,
+            "auth-attempt",
+            _client_identity(websocket, vehicle_id),
+            60,
+        )
+        ticket = require_twin_websocket(websocket, vehicle_id)
+        await _limit(
+            websocket,
+            "websocket",
+            ticket.subject if ticket else _client_identity(websocket, vehicle_id),
+            20,
+        )
+    except HTTPException as exc:
+        await websocket.close(code=1008, reason=str(exc.detail))
+        return
+    await websocket.accept(
+        subprotocol=(
+            WEBSOCKET_PROTOCOL
+            if getattr(websocket.app.state, "settings").twin_auth_required
+            else None
+        )
+    )
     try:
         async for frame in service.live_frames(vehicle_id):
+            if ticket is not None and int(time.time()) >= ticket.expires_at:
+                await websocket.close(code=1008, reason="Twin access ticket expired")
+                return
             await websocket.send_text(frame.model_dump_json())
     except InvalidVehicleId:
         await websocket.close(code=1008, reason="invalid vehicle_id")

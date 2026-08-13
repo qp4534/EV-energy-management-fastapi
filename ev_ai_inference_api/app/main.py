@@ -14,6 +14,7 @@ from app.chatbot.runtime import AIRuntime, create_ai_runtime
 from app.core.config import Settings, validate_bundle
 from app.core.session_manager import SessionManager
 from app.core.twin_redis import TwinRedisStore
+from app.core.twin_rate_limit import TwinRateLimiter
 from app.db import TwinRepository, create_database
 from app.db.anomaly_persistence import AnomalyPersistence
 from app.routers.current_stage import router
@@ -36,6 +37,7 @@ async def lifespan(app: FastAPI):
     app.state.report_worker_error = None
     settings = Settings.load()
     app.state.settings = settings
+    app.state.twin_rate_limiter = TwinRateLimiter()
     engine = None
     redis = None
     ai_runtime: AIRuntime | None = None

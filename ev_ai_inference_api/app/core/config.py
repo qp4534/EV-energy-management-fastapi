@@ -29,6 +29,11 @@ class Settings:
     anomaly_persistence_enabled: bool = False
     report_jobs_enabled: bool = False
     redis_required: bool = False
+    twin_auth_required: bool = False
+    twin_service_token: str = ""
+    twin_ticket_secret: str = ""
+    twin_ticket_audience: str = "ev-ai-twin"
+    twin_ticket_issuer: str = "ev-energy-backend"
 
     @classmethod
     def load(cls) -> "Settings":
@@ -52,6 +57,9 @@ class Settings:
         ).strip().lower()
         report_jobs = os.getenv("REPORT_JOBS_ENABLED", "false").strip().lower()
         redis_required = os.getenv("TWIN_REDIS_REQUIRED", "false").strip().lower()
+        twin_auth_required = os.getenv(
+            "TWIN_AUTH_REQUIRED", "false"
+        ).strip().lower()
         if required not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
             raise ValueError("TWIN_INFRA_REQUIRED must be a boolean")
         if anomaly_persistence not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
@@ -60,6 +68,8 @@ class Settings:
             raise ValueError("REPORT_JOBS_ENABLED must be a boolean")
         if redis_required not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
             raise ValueError("TWIN_REDIS_REQUIRED must be a boolean")
+        if twin_auth_required not in {"0", "1", "false", "true", "no", "yes", "off", "on"}:
+            raise ValueError("TWIN_AUTH_REQUIRED must be a boolean")
         settings = cls(
             bundle_dir=Path(os.getenv("MODEL_BUNDLE_DIR", default)).resolve(),
             cell_risk_gnn_dir=Path(
@@ -87,6 +97,15 @@ class Settings:
             in {"1", "true", "yes", "on"},
             report_jobs_enabled=report_jobs in {"1", "true", "yes", "on"},
             redis_required=redis_required in {"1", "true", "yes", "on"},
+            twin_auth_required=twin_auth_required in {"1", "true", "yes", "on"},
+            twin_service_token=os.getenv("TWIN_SERVICE_TOKEN", "").strip(),
+            twin_ticket_secret=os.getenv("TWIN_TICKET_SECRET", "").strip(),
+            twin_ticket_audience=os.getenv(
+                "TWIN_TICKET_AUDIENCE", "ev-ai-twin"
+            ).strip(),
+            twin_ticket_issuer=os.getenv(
+                "TWIN_TICKET_ISSUER", "ev-energy-backend"
+            ).strip(),
         )
         if settings.session_ttl_seconds <= 0:
             raise ValueError("SESSION_TTL_SECONDS must be positive")
@@ -100,6 +119,17 @@ class Settings:
             raise ValueError("Twin consumer group and name must not be empty")
         if settings.thermal_inference_timeout_seconds <= 0:
             raise ValueError("THERMAL_INFERENCE_TIMEOUT_SECONDS must be positive")
+        if settings.twin_auth_required:
+            if len(settings.twin_service_token) < 32:
+                raise ValueError(
+                    "TWIN_SERVICE_TOKEN must contain at least 32 characters when Twin auth is required"
+                )
+            if len(settings.twin_ticket_secret) < 32:
+                raise ValueError(
+                    "TWIN_TICKET_SECRET must contain at least 32 characters when Twin auth is required"
+                )
+            if not settings.twin_ticket_audience or not settings.twin_ticket_issuer:
+                raise ValueError("Twin ticket audience and issuer must not be empty")
         return settings
 
 
