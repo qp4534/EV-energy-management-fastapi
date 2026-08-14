@@ -17,6 +17,7 @@
   - AI-Hub CSV에서 발표용 250초 JSONL 생성
   - 96셀·3커넥터 입력 계약 검증
   - Spring Backend JWT API로 순차 전송
+  - 실제 `CHARGING_SESSION.session_id`를 필수 입력으로 받아 RDS 외래키 정합성 유지
   - ML·물리·최종 위험도와 `anomaly_id` 결과 JSONL 기록
 - `demo/bms_hgb/aihub_holdout_20250912005_demo.jsonl`
   - 정상 120, 주의 50, 경고 50, 긴급 30 논리초
@@ -61,7 +62,9 @@ ML보다 먼저 긴급을 낼 수 있다는 안전 구조를 함께 설명한다
 
 1. 전용 `CAR.car_id`와 해당 차량 접근 권한이 있는 일반 Spring JWT를 사용한다.
 2. JWT는 `BMS_DEMO_JWT` 환경변수로만 전달하고 저장소·명령행 인수에 기록하지 않는다.
-3. 새 `sessionId`, 0부터 증가하는 sequence, 정확히 1초 증가하는 observedAt을 사용한다.
+3. 시연 차량에 등록된 실제 `CHARGING_SESSION.session_id`, 0부터 증가하는
+   sequence, 정확히 1초 증가하는 observedAt을 사용한다. 임의 UUID를 충전 세션으로
+   사용하면 최초 주의 이상 저장 시 외래키 오류가 발생한다.
 4. 주의 이상 매초 RDS 이상 로그와 보고서 작업이 만들어질 수 있다. 운영 시연 전
    사건 단위 중복 저장 정책을 결정하거나 별도 시연 환경을 사용한다.
 5. 이 데이터는 96셀 실차 측정이 아니라 AI-Hub 실험 신호를 결정론적으로 확장한

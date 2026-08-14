@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import time
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pandas as pd
 
@@ -224,6 +224,7 @@ def replay_via_backend(
     *,
     backend_url: str,
     car_id: UUID,
+    charging_session_id: UUID,
     jwt_token: str,
     speed: float,
     result_path: Path,
@@ -236,7 +237,12 @@ def replay_via_backend(
         raise ValueError("speed must be positive")
     if stop_on_level is not None and stop_on_level not in RISK_NAMES:
         raise ValueError("stop_on_level must be between 0 and 3")
-    session_id = uuid4()
+    # The shared RDS schema treats session_id as a foreign key to
+    # CHARGING_SESSION.  Reusing an arbitrary inference-only UUID works while
+    # the result is normal, but fails on the first anomalous persistence write.
+    # A replay therefore has to use a real charging session created for the
+    # demo car through Spring Backend.
+    session_id = charging_session_id
     logical_start = start_at or datetime.now(timezone.utc).replace(microsecond=0)
     endpoint = (
         f"{backend_url.rstrip('/')}/api/twin-frames/cars/{car_id}/bms-samples"
@@ -328,6 +334,12 @@ def parse_args() -> argparse.Namespace:
     replay.add_argument("--dataset", type=Path, required=True)
     replay.add_argument("--backend-url", required=True)
     replay.add_argument("--car-id", type=UUID, required=True)
+    replay.add_argument(
+        "--charging-session-id",
+        type=UUID,
+        required=True,
+        help="Existing CHARGING_SESSION.session_id for the demo car",
+    )
     replay.add_argument("--speed", type=float, default=1.0)
     replay.add_argument("--start-at", type=_parse_start_at, default=None)
     replay.add_argument("--result", type=Path, required=True)
@@ -356,6 +368,7 @@ def main() -> None:
         load_demo_dataset(args.dataset),
         backend_url=args.backend_url,
         car_id=args.car_id,
+        charging_session_id=args.charging_session_id,
         jwt_token=jwt_token,
         speed=args.speed,
         result_path=args.result,
