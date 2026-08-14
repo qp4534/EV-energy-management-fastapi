@@ -5,12 +5,18 @@ from pathlib import Path
 import sys
 from uuid import UUID
 
+import pytest
+import pandas as pd
+
 from app.bms_demo import (
     _temperature_array,
     build_backend_payload,
+    build_model_sample,
+    generate_continuous_demo_rows,
     load_demo_dataset,
     model_route,
     parse_args,
+    run_local_ml_demo,
     service_stage,
 )
 
@@ -58,6 +64,23 @@ def test_backend_payload_does_not_transmit_source_risk_label() -> None:
     assert "finalRiskLevel" not in payload
 
 
+def test_local_model_sample_matches_deployed_twin_adapter() -> None:
+    row = {
+        "source_service_stage": 3,
+        "temperature_decic": [400, 600] * 48,
+        "voltage_mv": [3_800] * 96,
+        "connector_temperature_decic": [250] * 3,
+        "ambient_temperature_c": 25.0,
+        "pack_current_a": None,
+    }
+    sample = build_model_sample(row)
+    assert sample["voltage_v"] == pytest.approx(3.8)
+    assert sample["temp_mean_c"] == 50.0
+    assert sample["temp_max_c"] == 60.0
+    assert sample["temp_delta_c"] == 20.0
+    assert "source_service_stage" not in sample
+
+
 def test_committed_demo_dataset_has_expected_contract() -> None:
     path = (
         Path(__file__).resolve().parents[1]
@@ -100,3 +123,57 @@ def test_replay_parser_requires_real_charging_session_id(
     args = parse_args()
 
     assert args.charging_session_id == UUID(session_id)
+
+
+def test_local_ml_demo_observes_all_four_deployed_model_stages(
+    tmp_path: Path,
+) -> None:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "demo"
+        / "bms_hgb"
+        / "aihub_holdout_20250912005_demo.jsonl"
+    )
+    summary = run_local_ml_demo(
+        load_demo_dataset(path),
+        speed=0,
+        print_every=1_000,
+        result_path=tmp_path / "local-result.jsonl",
+    )
+    assert summary["observed_all_four_ml_stages"] is True
+    assert [item["stage"] for item in summary["transitions"]] == [
+        "warming_up",
+        "normal",
+        "caution",
+        "warning",
+        "emergency",
+    ]
+    assert summary["network_or_database_used"] is False
+
+
+def test_continuous_generator_preserves_one_second_grid(tmp_path: Path) -> None:
+    source = tmp_path / "source.csv"
+    frame = pd.DataFrame(
+        {
+            "experiment_id": ["E"] * 7,
+            "elapsed_sec": [0, 120, 121, 122, 123, 124, 125],
+            "voltage_v": [3.8, 3.8, 3.7, 3.6, 3.5, 3.0, 2.0],
+            "surface_temp_c": [25, 30, 35, 45, 60, 80, 100],
+            "positive_terminal_temp_c": [25, 31, 36, 46, 61, 81, 101],
+            "ambient_temp_c": [23] * 7,
+            "tr_stage": [1, 1, 2, 3, 4, 5, 6],
+        }
+    )
+    frame.to_csv(source, index=False)
+    rows = generate_continuous_demo_rows(
+        source,
+        experiment_id="E",
+        warmup_before_caution_seconds=120,
+        emergency_tail_seconds=1,
+    )
+    assert [row["sequence"] for row in rows] == list(range(len(rows)))
+    assert [row["source_elapsed_sec"] for row in rows] == list(
+        range(1, 126)
+    )
+    assert rows[-1]["source_service_stage"] == 3
+    assert all(row["ambient_temperature_c"] is None for row in rows)

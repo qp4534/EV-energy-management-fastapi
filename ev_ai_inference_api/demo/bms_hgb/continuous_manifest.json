@@ -1,0 +1,50 @@
+{
+  "dataset_id": "bms-hgb-continuous-validation-20250825004-v1",
+  "purpose": "causal time-compressed presentation replay only",
+  "source": {
+    "dataset": "AI-Hub battery thermal-runaway controlled experiment CSV",
+    "experiment_id": "20250825004",
+    "locked_split": "validation",
+    "source_elapsed_start": 201.0,
+    "source_elapsed_end": 786.0
+  },
+  "rows": 586,
+  "logical_frequency_hz": 1,
+  "service_stage_source_counts": {
+    "normal": 120,
+    "caution": 427,
+    "warning": 37,
+    "emergency": 2
+  },
+  "selection": {
+    "pre_screened_validation_candidates": [
+      "20250825004",
+      "20250811005",
+      "20250820002"
+    ],
+    "criteria": [
+      "all four HGB stages appear in monotonic order",
+      "short presentation duration",
+      "minimize rows where Safety Fusion exceeds HGB by two levels"
+    ],
+    "selected_runtime_audit": {
+      "logical_rows": 586,
+      "fusion_minus_hgb_ge_2_rows": 4,
+      "hgb_stage_regression": false
+    }
+  },
+  "adapter": {
+    "temperature": "48 surface-temperature cells plus 48 positive-terminal-temperature cells",
+    "voltage": "AI-Hub cell voltage repeated across 96 cells",
+    "missing_source_seconds": "linear interpolation to a causal 1 Hz grid",
+    "ambient_temperature_c": "not transmitted: AI-Hub chamber ambient is not guaranteed to be semantically equivalent to vehicle pack ambient/coolant temperature",
+    "connector_temperature": "AI-Hub chamber ambient retained only as a neutral visualization placeholder and never used as cell temperature",
+    "risk_labels_transmitted_to_backend": false
+  },
+  "limitations": [
+    "This is a selected validation experiment for presentation, not new performance evidence.",
+    "The 96-cell layout is an adapter and not measured vehicle cell data.",
+    "The source label is retained only for offline review and never sent to the model or Backend."
+  ],
+  "sha256": "d113e3aea1066b2ec90e1be1ae967b252589aadf34aae63e381f45e5b51de4ea"
+}

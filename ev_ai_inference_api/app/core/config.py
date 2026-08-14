@@ -122,6 +122,6 @@ def validate_bundle(settings: Settings) -> dict:
     if str(bundle / "app") not in sys.path:
         sys.path.insert(0, str(bundle / "app"))
     # Construct once here: joblib load and runtime feature-contract checks fail fast.
-    from hybrid_safety_supervisor import HybridSafetySupervisorV2
-    HybridSafetySupervisorV2(bundle / "models" / "hybrid_v1", policy_path)
+    from hybrid_safety_supervisor_v21 import HybridSafetySupervisorV21
+    HybridSafetySupervisorV21(bundle / "models" / "hybrid_v1", policy_path)
     return manifest

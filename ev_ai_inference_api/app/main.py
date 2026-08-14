@@ -43,8 +43,8 @@ async def lifespan(app: FastAPI):
     report_worker_task = None
     try:
         manifest = validate_bundle(settings)
-        from hybrid_safety_supervisor import HybridSafetySupervisorV2
-        def factory(): return HybridSafetySupervisorV2(settings.bundle_dir / "models" / "hybrid_v1", settings.bundle_dir / "config" / "safety_policy.v2.json")
+        from hybrid_safety_supervisor_v21 import HybridSafetySupervisorV21
+        def factory(): return HybridSafetySupervisorV21(settings.bundle_dir / "models" / "hybrid_v1", settings.bundle_dir / "config" / "safety_policy.v2.json")
         app.state.manifest = manifest
         current_stage_service = CurrentStageService(
             SessionManager(factory, settings.session_ttl_seconds, settings.max_sessions)

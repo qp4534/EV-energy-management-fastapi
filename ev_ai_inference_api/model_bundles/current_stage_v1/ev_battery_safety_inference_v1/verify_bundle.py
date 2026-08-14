@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "app"))
 
-from hybrid_safety_supervisor import HybridSafetySupervisorV2  # noqa: E402
+from hybrid_safety_supervisor_v21 import HybridSafetySupervisorV21  # noqa: E402
 
 
 def sample(**overrides):
@@ -25,7 +25,7 @@ def sample(**overrides):
 
 
 def main() -> None:
-    supervisor = HybridSafetySupervisorV2(
+    supervisor = HybridSafetySupervisorV21(
         package_root=ROOT / "models" / "hybrid_v1",
         policy_path=ROOT / "config" / "safety_policy.v2.json",
     )
