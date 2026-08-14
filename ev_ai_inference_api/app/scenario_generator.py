@@ -262,9 +262,9 @@ def build_scenario_sample(
 
 
 def _supervisor_factory(settings: Settings):
-    from hybrid_safety_supervisor import HybridSafetySupervisorV2
+    from hybrid_safety_supervisor_v21 import HybridSafetySupervisorV21
 
-    return lambda: HybridSafetySupervisorV2(
+    return lambda: HybridSafetySupervisorV21(
         settings.bundle_dir / "models" / "hybrid_v1",
         settings.bundle_dir / "config" / "safety_policy.v2.json",
     )
