@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
+from typing import Callable
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -22,6 +24,123 @@ ALERT_RISK_NUMBER = {
     "warning": 2,
     "emergency": 3,
 }
+REPORT_RISK_CONFIRMATION_SAMPLES = 3
+REPORT_NORMAL_REARM_SECONDS = 10
+
+
+@dataclass(frozen=True)
+class ReportAlertState:
+    """Durable per-vehicle state used only to throttle AI report jobs."""
+
+    incident_id: UUID | None = None
+    current_risk_level: int = 0
+    last_reported_risk_level: int = 0
+    candidate_risk_level: int | None = None
+    candidate_count: int = 0
+    normal_since: datetime | None = None
+    last_observed_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class ReportAlertTransition:
+    state: ReportAlertState
+    enqueue_report: bool = False
+
+
+def advance_report_alert_state(
+    state: ReportAlertState,
+    *,
+    risk_level: int,
+    observed_at: datetime,
+    confirmation_samples: int = REPORT_RISK_CONFIRMATION_SAMPLES,
+    normal_rearm_seconds: int = REPORT_NORMAL_REARM_SECONDS,
+    incident_factory: Callable[[], UUID] = uuid4,
+) -> ReportAlertTransition:
+    """Advance one vehicle's report state without changing inference persistence.
+
+    Caution and warning must repeat before they open/escalate an incident. Emergency
+    is immediate. A report is emitted only for a risk level higher than any level
+    already reported in the active incident. Ten continuous normal seconds rearm the
+    state so a later abnormal period becomes a new incident.
+    """
+
+    if risk_level not in {0, 1, 2, 3}:
+        raise ValueError("risk_level must be between 0 and 3")
+    if confirmation_samples <= 0:
+        raise ValueError("confirmation_samples must be positive")
+    if normal_rearm_seconds <= 0:
+        raise ValueError("normal_rearm_seconds must be positive")
+    if state.last_observed_at is not None and observed_at < state.last_observed_at:
+        return ReportAlertTransition(state=state)
+
+    if risk_level == 0:
+        if state.incident_id is None:
+            return ReportAlertTransition(
+                state=ReportAlertState(last_observed_at=observed_at)
+            )
+
+        normal_since = state.normal_since or observed_at
+        if observed_at - normal_since >= timedelta(seconds=normal_rearm_seconds):
+            return ReportAlertTransition(
+                state=ReportAlertState(last_observed_at=observed_at)
+            )
+        return ReportAlertTransition(
+            state=replace(
+                state,
+                candidate_risk_level=None,
+                candidate_count=0,
+                normal_since=normal_since,
+                last_observed_at=observed_at,
+            )
+        )
+
+    # Any abnormal sample interrupts a possible normal-recovery window.
+    base = replace(state, normal_since=None, last_observed_at=observed_at)
+    if risk_level <= state.current_risk_level:
+        return ReportAlertTransition(
+            state=replace(
+                base,
+                current_risk_level=risk_level,
+                candidate_risk_level=None,
+                candidate_count=0,
+            )
+        )
+
+    if risk_level == ALERT_RISK_NUMBER["emergency"]:
+        confirmed = True
+        candidate_count = 0
+    else:
+        candidate_count = (
+            state.candidate_count + 1
+            if state.candidate_risk_level == risk_level
+            else 1
+        )
+        confirmed = candidate_count >= confirmation_samples
+
+    if not confirmed:
+        return ReportAlertTransition(
+            state=replace(
+                base,
+                candidate_risk_level=risk_level,
+                candidate_count=candidate_count,
+            )
+        )
+
+    incident_id = state.incident_id or incident_factory()
+    enqueue_report = risk_level > state.last_reported_risk_level
+    return ReportAlertTransition(
+        state=replace(
+            base,
+            incident_id=incident_id,
+            current_risk_level=risk_level,
+            last_reported_risk_level=max(
+                state.last_reported_risk_level, risk_level
+            ),
+            candidate_risk_level=None,
+            candidate_count=0,
+        ),
+        enqueue_report=enqueue_report,
+    )
 
 
 class AnomalyPersistence:
@@ -44,17 +163,24 @@ class AnomalyPersistence:
         twin_frame: TwinFrame | None = None,
     ) -> str | None:
         alert = inference.final_safety_alert
-        if alert not in ALERT_RISK_TEXT:
+        if alert not in ALERT_RISK_NUMBER:
             return None
 
-        try:
-            UUID(car_id)
-        except ValueError as exc:
-            raise ValueError(
-                "vehicle_id must be the CAR.car_id UUID when persistence is enabled"
-            ) from exc
-
         observed_at = payload.observed_at or datetime.now(timezone.utc)
+        if alert == "normal":
+            if self._enqueue_report_jobs:
+                car_uuid = self._validate_car_id(car_id)
+                async with self._sessions.begin() as session:
+                    await self._advance_report_state(
+                        session,
+                        car_uuid=car_uuid,
+                        risk_level=ALERT_RISK_NUMBER[alert],
+                        observed_at=observed_at,
+                    )
+            return None
+
+        car_uuid = self._validate_car_id(car_id)
+
         ml_risk_level = (
             ALERT_RISK_NUMBER[inference.ml_pattern_stage]
             if inference.ml_pattern_stage is not None
@@ -82,6 +208,14 @@ class AnomalyPersistence:
         )
 
         async with self._sessions.begin() as session:
+            report_transition = None
+            if self._enqueue_report_jobs:
+                report_transition = await self._advance_report_state(
+                    session,
+                    car_uuid=car_uuid,
+                    risk_level=ALERT_RISK_NUMBER[alert],
+                    observed_at=observed_at,
+                )
             anomaly_id = await session.scalar(
                 text(
                     '''
@@ -137,7 +271,10 @@ class AnomalyPersistence:
                     "source_image_ref": payload.source_image_ref,
                 },
             )
-            if self._enqueue_report_jobs:
+            if report_transition is not None and report_transition.enqueue_report:
+                incident_id = report_transition.state.incident_id
+                if incident_id is None:
+                    raise RuntimeError("report incident id is missing after confirmation")
                 await session.execute(
                     text(
                         """
@@ -153,9 +290,93 @@ class AnomalyPersistence:
                     ),
                     {
                         "job_id": uuid4(),
-                        "job_key": f"ANOMALY:{anomaly_id}",
+                        "job_key": f"ANOMALY:{incident_id}:{alert}",
                         "car_id": car_id,
                         "anomaly_id": anomaly_id,
                     },
                 )
         return str(anomaly_id)
+
+    @staticmethod
+    def _validate_car_id(car_id: str) -> UUID:
+        try:
+            return UUID(car_id)
+        except ValueError as exc:
+            raise ValueError(
+                "vehicle_id must be the CAR.car_id UUID when persistence is enabled"
+            ) from exc
+
+    @staticmethod
+    async def _advance_report_state(
+        session: AsyncSession,
+        *,
+        car_uuid: UUID,
+        risk_level: int,
+        observed_at: datetime,
+    ) -> ReportAlertTransition:
+        # The row lock serializes samples for one vehicle across all FastAPI pods.
+        await session.execute(
+            text(
+                """
+                INSERT INTO ai_report_alert_states (car_id, last_observed_at)
+                VALUES (:car_id, :last_observed_at)
+                ON CONFLICT (car_id) DO NOTHING
+                """
+            ),
+            {"car_id": car_uuid, "last_observed_at": observed_at},
+        )
+        result = await session.execute(
+            text(
+                """
+                SELECT incident_id, current_risk_level, last_reported_risk_level,
+                       candidate_risk_level, candidate_count, normal_since,
+                       last_observed_at
+                FROM ai_report_alert_states
+                WHERE car_id = :car_id
+                FOR UPDATE
+                """
+            ),
+            {"car_id": car_uuid},
+        )
+        row = result.mappings().one()
+        transition = advance_report_alert_state(
+            ReportAlertState(
+                incident_id=row["incident_id"],
+                current_risk_level=row["current_risk_level"],
+                last_reported_risk_level=row["last_reported_risk_level"],
+                candidate_risk_level=row["candidate_risk_level"],
+                candidate_count=row["candidate_count"],
+                normal_since=row["normal_since"],
+                last_observed_at=row["last_observed_at"],
+            ),
+            risk_level=risk_level,
+            observed_at=observed_at,
+        )
+        next_state = transition.state
+        await session.execute(
+            text(
+                """
+                UPDATE ai_report_alert_states
+                SET incident_id = :incident_id,
+                    current_risk_level = :current_risk_level,
+                    last_reported_risk_level = :last_reported_risk_level,
+                    candidate_risk_level = :candidate_risk_level,
+                    candidate_count = :candidate_count,
+                    normal_since = :normal_since,
+                    last_observed_at = :last_observed_at,
+                    updated_at = NOW()
+                WHERE car_id = :car_id
+                """
+            ),
+            {
+                "car_id": car_uuid,
+                "incident_id": next_state.incident_id,
+                "current_risk_level": next_state.current_risk_level,
+                "last_reported_risk_level": next_state.last_reported_risk_level,
+                "candidate_risk_level": next_state.candidate_risk_level,
+                "candidate_count": next_state.candidate_count,
+                "normal_since": next_state.normal_since,
+                "last_observed_at": next_state.last_observed_at,
+            },
+        )
+        return transition

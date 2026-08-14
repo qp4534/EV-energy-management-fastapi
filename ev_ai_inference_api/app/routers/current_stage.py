@@ -25,10 +25,7 @@ async def sample(vehicle_id: str, payload: SampleRequest, request: Request):
     if not request.app.state.ready: raise HTTPException(status_code=503, detail="model bundle is not ready")
     try:
         result = await request.app.state.current_stage_service.evaluate(vehicle_id, payload)
-        if (
-            getattr(request.app.state, "anomaly_persistence_enabled", False)
-            and result.final_safety_alert in {"caution", "warning", "emergency"}
-        ):
+        if getattr(request.app.state, "anomaly_persistence_enabled", False):
             anomaly_id = await request.app.state.anomaly_persistence.persist_if_anomalous(
                 vehicle_id, payload, result
             )

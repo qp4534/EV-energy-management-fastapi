@@ -295,7 +295,7 @@ class TwinService:
                 fusion_source=fused["fusion_source"],
             )
             frame = self.cell_risk_analyzer.enrich_one(frame)
-            if self.anomaly_persistence is not None and frame.final_risk_level > 0:
+            if self.anomaly_persistence is not None:
                 persistence_payload = model_request.model_copy(
                     update={
                         "hotspot_cell_index": frame.hotspot_cell_index,
