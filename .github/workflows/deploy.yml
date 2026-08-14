@@ -129,10 +129,12 @@ jobs:
         run: |
           SMOKE_SCRIPT_B64="$(base64 -w0 <<'PY'
           import json
+          import urllib.error
           import urllib.request
           from datetime import datetime, timezone
           from uuid import uuid4
 
+          vehicle_id = str(uuid4())
           payload = {
               "schema_version": 1,
               "layout_id": "generic_ev_concept_96_v1",
@@ -146,13 +148,19 @@ jobs:
               "pack_current_a": 20.0,
           }
           request = urllib.request.Request(
-              "http://127.0.0.1:8000/api/v1/twins/vehicles/smoke-test/samples",
+              f"http://127.0.0.1:8000/api/v1/twins/vehicles/{vehicle_id}/samples",
               data=json.dumps(payload).encode(),
               headers={"Content-Type": "application/json"},
               method="POST",
           )
-          with urllib.request.urlopen(request, timeout=15) as response:
-              result = json.load(response)
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  result = json.load(response)
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              raise RuntimeError(
+                  f"FastAPI sample-path smoke failed: HTTP {exc.code}: {body}"
+              ) from exc
           if (
               result["final_risk_level"] != 0
               or result.get("anomaly_id") is not None
@@ -169,10 +177,12 @@ jobs:
         run: |
           SMOKE_SCRIPT_B64="$(base64 -w0 <<'PY'
           import json
+          import urllib.error
           import urllib.request
           from datetime import datetime, timezone
           from uuid import uuid4
 
+          vehicle_id = str(uuid4())
           payload = {
               "schema_version": 1,
               "layout_id": "generic_ev_concept_96_v1",
@@ -184,7 +194,7 @@ jobs:
               "connector_temperature_decic": [300, 300, 300],
           }
           request = urllib.request.Request(
-              "http://ev-ai-inference-api.fastapi.svc.cluster.local/api/v1/twins/vehicles/backend-smoke-test/samples",
+              f"http://ev-ai-inference-api.fastapi.svc.cluster.local/api/v1/twins/vehicles/{vehicle_id}/samples",
               data=json.dumps(payload).encode(),
               headers={"Content-Type": "application/json"},
               method="POST",
@@ -192,6 +202,11 @@ jobs:
           try:
               with urllib.request.urlopen(request, timeout=15) as response:
                   result = json.load(response)
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              raise RuntimeError(
+                  f"backend-namespace FastAPI smoke failed: HTTP {exc.code}: {body}"
+              ) from exc
           except Exception as exc:
               raise RuntimeError(f"backend-namespace FastAPI call failed: {exc}") from exc
           if (
