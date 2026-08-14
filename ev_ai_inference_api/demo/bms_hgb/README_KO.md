@@ -44,7 +44,7 @@ python -m app.bms_demo generate `
 
 저장소에는 동일 명령으로 생성하고 검증한 JSONL과 manifest를 포함한다.
 
-## 2. JWT와 전용 차량 준비
+## 2. JWT·전용 차량·충전 세션 준비
 
 Spring Backend에 로그인한 사용자가 접근 가능한 `CAR.car_id` UUID를 전용 시연
 차량으로 선택한다. 일반 사용자 JWT를 코드나 Git에 저장하지 않고 현재
@@ -52,6 +52,31 @@ PowerShell 세션 환경변수에만 넣는다.
 
 ```powershell
 $env:BMS_DEMO_JWT = "로그인 후 받은 JWT"
+```
+
+시연 차량은 실제 `CHARGING_SESSION` 한 건과 연결되어야 한다. Backend의
+`POST /api/charging-sessions`로 세션을 만들고 응답의 `sessionId`를 보관한다.
+`chargerId`에는 RDS에 이미 존재하는 시연 충전기의 UUID를 사용한다.
+
+```powershell
+$sessionBody = @{
+  startTime  = (Get-Date).ToUniversalTime().ToString("o")
+  endTime    = $null
+  changeState = "충전중"
+  carId      = $carId
+  chargerId  = $chargerId
+  startSoc   = 60.0
+  endSoc     = $null
+} | ConvertTo-Json
+
+$demoSession = Invoke-RestMethod `
+  -Method Post `
+  -Uri "${backend}/api/charging-sessions" `
+  -Headers $headers `
+  -ContentType "application/json; charset=utf-8" `
+  -Body $sessionBody
+
+$chargingSessionId = $demoSession.sessionId
 ```
 
 ## 3. Backend 경유 재생
@@ -63,13 +88,15 @@ python -m app.bms_demo replay `
   --dataset demo\bms_hgb\aihub_holdout_20250912005_demo.jsonl `
   --backend-url "https://백엔드주소" `
   --car-id "전용-시연-CAR-UUID" `
+  --charging-session-id "전용-시연-CHARGING_SESSION-UUID" `
   --speed 1 `
   --result runtime\bms_hgb_demo_result.jsonl
 ```
 
 모델은 처음 29개 샘플까지 `warming_up`, 30번째부터 30초 HGB, 120번째부터
-120초 장기 추세 HGB를 사용한다. 새 실행마다 새로운 `sessionId`를 생성하므로
-기존 차량 이력과 섞이지 않는다.
+120초 장기 추세 HGB를 사용한다. `sessionId`에는 Backend가 생성한 실제
+`CHARGING_SESSION.session_id`를 사용한다. 따라서 주의 이상 결과가 RDS에 저장될
+때도 외래키 제약을 위반하지 않는다.
 
 발표 시간을 줄이려면 AI 시연 순서 약 2분 전에 정상 120초 구간을 백그라운드로
 시작한다. 발표자가 화면을 설명할 때 주의·경고·긴급 구간이 이어진다.

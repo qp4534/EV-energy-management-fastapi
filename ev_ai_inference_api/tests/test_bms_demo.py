@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 from uuid import UUID
 
 from app.bms_demo import (
@@ -9,6 +10,7 @@ from app.bms_demo import (
     build_backend_payload,
     load_demo_dataset,
     model_route,
+    parse_args,
     service_stage,
 )
 
@@ -50,6 +52,7 @@ def test_backend_payload_does_not_transmit_source_risk_label() -> None:
     )
     assert len(payload["temperatureDecic"]) == 96
     assert len(payload["voltageMv"]) == 96
+    assert payload["sessionId"] == "11111111-1111-1111-1111-111111111111"
     assert "source_service_stage" not in payload
     assert "riskLevel" not in payload
     assert "finalRiskLevel" not in payload
@@ -68,3 +71,32 @@ def test_committed_demo_dataset_has_expected_contract() -> None:
         sum(row["source_service_stage"] == stage for row in rows)
         for stage in range(4)
     ] == [120, 50, 50, 30]
+
+
+def test_replay_parser_requires_real_charging_session_id(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    session_id = "22222222-2222-2222-2222-222222222222"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bms_demo",
+            "replay",
+            "--dataset",
+            str(tmp_path / "demo.jsonl"),
+            "--backend-url",
+            "https://backend.example",
+            "--car-id",
+            "11111111-1111-1111-1111-111111111111",
+            "--charging-session-id",
+            session_id,
+            "--result",
+            str(tmp_path / "result.jsonl"),
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.charging_session_id == UUID(session_id)
