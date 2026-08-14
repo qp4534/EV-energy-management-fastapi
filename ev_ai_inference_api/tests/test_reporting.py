@@ -116,9 +116,10 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
         now=lambda: NOW,
     )
 
-    _, report = await service.generate(job(ReportType.ANOMALY))
+    title, report = await service.generate(job(ReportType.ANOMALY))
     payload = report.model_dump(mode="json", by_alias=True)
 
+    assert title == "이상 보고서 - 2026-08-06 21:00"
     assert payload["reportType"] == "이상"
     assert report.risk_level == "WARNING"
     assert report.llm_enhanced is True
@@ -128,9 +129,9 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
     detection_by_label = {
         item["label"]: item["value"] for item in detection_section["items"]
     }
-    assert detection_by_label["발생 시각"] == "2026-08-06 21:00:00 KST"
+    assert detection_by_label["발생 시각"] == "2026-08-06 21:00:00"
     assert detection_by_label["위험등급"] == "경고"
-    assert detection_by_label["이상 유형"] == "BMS_SAFETY_ALERT"
+    assert detection_by_label["이상 유형"] == "BMS 통합 안전 경보"
     metric_section = next(
         section for section in payload["sections"] if section["title"] == "이상 지표"
     )
@@ -142,6 +143,7 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
     assert metrics_by_label["누적 충전 사이클"]["value"] == 342
     chart = next(section for section in payload["sections"] if section["type"] == "lineChart")
     assert chart["title"] == "최근 24시간 온도 추이"
+    assert chart["labels"] == ["20시", "21시"]
     assert chart["datasets"][0]["data"] == [38.4, 61.2]
     assert chart["unit"] == "°C"
     assert any(section["title"] == "원인 분석" for section in payload["sections"])
@@ -151,6 +153,34 @@ async def test_anomaly_report_keeps_db_metrics_and_has_no_human_signature_fields
     assert "검토자" not in serialized
     assert "서명" not in serialized
     assert payload["actions"] == []
+
+
+@pytest.mark.asyncio
+async def test_anomaly_report_removes_timezone_marker_from_llm_summary() -> None:
+    facts = {
+        "detected_at": NOW,
+        "abnormal_type": "BMS_SAFETY_ALERT",
+        "risk_level": "경고",
+    }
+    generator = FakeGenerator(
+        response=(
+            '{"summary":"2026-08-06 21:00 UTC에 이상이 감지되었습니다.",'
+            '"interpretation":null,"recommendedActions":[]}'
+        )
+    )
+    service = ReportGenerationService(
+        FakeReportData(anomaly=facts),
+        FakeRag([evidence()]),
+        generator,
+        now=lambda: NOW,
+    )
+
+    _, report = await service.generate(job(ReportType.ANOMALY))
+    summary = next(
+        section for section in report.sections if section.title == "이상 상황 요약"
+    )
+
+    assert summary.content == "2026-08-06 21:00에 이상이 감지되었습니다."
 
 
 @pytest.mark.asyncio

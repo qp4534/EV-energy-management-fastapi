@@ -20,6 +20,45 @@ from .schemas import (
 
 KST = timezone(timedelta(hours=9))
 
+_ABNORMAL_TYPE_LABELS = {
+    "BMS_SAFETY_ALERT": "BMS 통합 안전 경보",
+    "CONNECTOR_LOCAL_OVERHEAT": "커넥터 국부 과열",
+    "BATTERY_OVER_TEMP": "배터리 임계온도 초과",
+    "THERMAL_RUNAWAY_RISK": "열폭주 위험",
+    "CELL_VOLTAGE_IMBALANCE": "셀 전압 불균형",
+    "BATTERY_OVERHEAT_SIGN": "배터리 과열 징후",
+    "RAPID_TEMP_RISE": "급격한 온도 상승",
+    "CONNECTOR_TEMP_RISE": "커넥터 온도 상승",
+    "CELL_VOLTAGE_DEVIATION": "셀 전압 편차 증가",
+    "CHARGING_CURRENT_FLUCTUATION": "충전 전류 변동",
+}
+
+
+def _to_kst(value: datetime) -> datetime:
+    """Return an aware KST datetime; legacy naive values are treated as UTC."""
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(KST)
+
+
+def _abnormal_type_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "분류되지 않은 이상"
+    return _ABNORMAL_TYPE_LABELS.get(raw.upper(), raw)
+
+
+def _remove_timezone_marker(value: str) -> str:
+    """Remove user-facing UTC/KST suffixes from an already localized sentence."""
+
+    return re.sub(
+        r"\s*\(?(?:UTC|KST)\)?(?=[^A-Za-z]|$)",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+
 
 class ReportDataRepository(Protocol):
     async def load_anomaly_facts(self, job: ReportJob) -> dict[str, Any]: ...
@@ -31,6 +70,7 @@ _REPORT_SYSTEM = """당신은 전기차 충전·배터리 안전보고서 문장
 반드시 JSON 객체 하나만 반환한다. 키는 summary, interpretation,
 recommendedActions 세 개만 사용한다.
 - FACTS에 있는 사실과 EVIDENCE의 지침만 사용한다.
+- FACTS의 시각은 한국 현지 시각이며 UTC, KST 같은 시간대 약어를 붙이지 않는다.
 - 수치, 원인, 위험등급, 법령 조항을 만들지 않는다.
 - 가능한 원인은 확정 원인이 아니라 가능성으로 표현한다.
 - EVIDENCE가 뒷받침하지 않는 조치를 추가하지 않는다.
@@ -214,8 +254,9 @@ class ReportGenerationService:
         detected_at = facts.get("detected_at") or self.now()
         if isinstance(detected_at, str):
             detected_at = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
+        detected_at_kst = _to_kst(detected_at)
         risk = _risk_label(facts.get("risk_level") or facts.get("final_risk_level"))
-        abnormal_type = facts.get("abnormal_type") or "분류되지 않은 이상"
+        abnormal_type = _abnormal_type_label(facts.get("abnormal_type"))
         model_input = facts.get("model_input") or {}
         raw_metrics = facts.get("raw_metrics") or {}
         temperature = _number(model_input.get("temp_max_c"))
@@ -245,11 +286,7 @@ class ReportGenerationService:
             )
         )
         charge_cycles = facts.get("charge_cycles")
-        detected_value = (
-            detected_at.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S KST")
-            if isinstance(detected_at, datetime)
-            else str(detected_at)
-        )
+        detected_value = detected_at_kst.strftime("%Y-%m-%d %H:%M:%S")
         risk_display = {
             "EMERGENCY": "긴급",
             "WARNING": "경고",
@@ -298,18 +335,18 @@ class ReportGenerationService:
             ),
         ]
 
-        summary = f"{detected_at:%Y-%m-%d %H:%M}에 {abnormal_type} 이상이 감지되었습니다."
+        summary = (
+            f"{detected_at_kst:%Y-%m-%d %H:%M}에 "
+            f"{abnormal_type} 이상이 감지되었습니다."
+        )
         query = f"{abnormal_type} 위험등급 {risk} 안전 조치 전기차 배터리 충전"
         chunks = await self._search(query)
         llm_facts = {
             key: facts.get(key)
             for key in (
-                "abnormal_type",
                 "source_type",
                 "trigger_value",
-                "detected_at",
                 "risk_level",
-                "frame_observed_at",
                 "hotspot_cell_index",
                 "hotspot_connector_index",
                 "ml_risk_level",
@@ -320,6 +357,15 @@ class ReportGenerationService:
                 "model_input",
             )
         }
+        llm_facts["abnormal_type"] = abnormal_type
+        llm_facts["detected_at"] = detected_value
+        frame_observed_at = facts.get("frame_observed_at")
+        if isinstance(frame_observed_at, datetime):
+            llm_facts["frame_observed_at"] = _to_kst(frame_observed_at).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        else:
+            llm_facts["frame_observed_at"] = frame_observed_at
         llm_facts["report_metrics"] = metrics
         enhancement = await self._enhance(llm_facts, chunks)
         sections = [
@@ -347,7 +393,7 @@ class ReportGenerationService:
                     unit="°C",
                     labels=[
                         (
-                            item["observed_at"].strftime("%m/%d %H시")
+                            _to_kst(item["observed_at"]).strftime("%H시")
                             if isinstance(item["observed_at"], datetime)
                             else str(item["observed_at"])
                         )
@@ -366,7 +412,9 @@ class ReportGenerationService:
             )
         if enhancement is not None:
             sections[0] = ReportSection(
-                type="summary", title="이상 상황 요약", content=enhancement.summary
+                type="summary",
+                title="이상 상황 요약",
+                content=_remove_timezone_marker(enhancement.summary),
             )
             if enhancement.interpretation:
                 sections.append(
@@ -399,7 +447,7 @@ class ReportGenerationService:
             missing.append("temperatureHistory")
         if not chunks:
             missing.append("ragEvidence")
-        title = f"이상 보고서 - {detected_at:%Y-%m-%d %H:%M}"
+        title = f"이상 보고서 - {detected_at_kst:%Y-%m-%d %H:%M}"
         return title, GeneratedReport(
             report_type=ReportType.ANOMALY,
             llm_enhanced=enhancement is not None,
